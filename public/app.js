@@ -8,7 +8,7 @@ const S = {
   sel: null, // { type: 'agent' | 'run' | 'pipe', id }
   run: null, // full run (with events) when a run is selected
   transcriptFor: null, transcriptAt: 0,
-  approvals: [], settings: { awayMode: false },
+  approvals: [], settings: { awayMode: false }, roles: [],
   usageDays: 30, usageTable: false,
 };
 
@@ -416,7 +416,7 @@ async function loadRun(id) {
   const canContinue = r.status !== 'running' && r.sessionId;
   d.innerHTML = `
     <div class="dhead">
-      <h2><span class="prov ${r.provider}">${PROV[r.provider]}</span>${esc(r.title)}</h2>
+      <h2><span class="prov ${r.provider}">${PROV[r.provider]}</span>${roleBadge(r.role)}${esc(r.title)}</h2>
       <div class="meta" id="rmeta">${runMeta(r)}</div>
       <div class="dactions">
         ${r.status === 'running' ? '<button class="danger" data-act="stop">Stop</button>' : ''}
@@ -434,7 +434,7 @@ async function loadRun(id) {
   stream.scrollTop = stream.scrollHeight;
   d.querySelector('[data-act=stop]')?.addEventListener('click', () => api(`/api/runs/${r.id}/stop`, { method: 'POST' }));
   d.querySelector('[data-act=session]')?.addEventListener('click', () => select('agent', agent.key));
-  d.querySelector('[data-act=again]').onclick = () => openTask({ provider: r.provider, cwd: r.cwd, mode: r.mode, prompt: r.prompt });
+  d.querySelector('[data-act=again]').onclick = () => openTask({ provider: r.provider, cwd: r.cwd, mode: r.mode, prompt: r.prompt, role: r.role });
   if (canContinue) wireComposer(r.provider, r.cwd, r.sessionId, false, r.mode);
 }
 
@@ -468,7 +468,7 @@ function pipeHtml(p) {
     return `
       <div class="pstep" ${r ? `data-run="${r.id}"` : ''}>
         <div><span class="dot ${r?.status || 'ended'}" style="display:inline-block"></span>
-          <b>Step ${i + 1}</b> · <span class="prov ${s.provider}">${PROV[s.provider]}</span> · ${esc(S.config?.modes?.[s.mode] || s.mode)} · <span class="pill ${st}">${esc(STATUS[st] || st)}</span></div>
+          <b>Step ${i + 1}</b> ${s.role ? roleBadge(roleById(s.role) || s.role) : ''} · <span class="prov ${s.provider}">${PROV[s.provider]}</span> · ${esc(S.config?.modes?.[s.mode] || s.mode)} · <span class="pill ${st}">${esc(STATUS[st] || st)}</span></div>
         ${s.parallel ? '<div><span class="tag">runs alongside the previous step</span></div>' : ''}
         ${r?.worktree ? `<div class="wt">⎇ ${esc(r.worktree.branch)} · ${r.worktree.removed ? 'worktree removed (branch kept)' : esc(r.worktree.dir.replace(/^\/Users\/[^/]+/, '~'))}${r.worktree.files != null ? ` · ${r.worktree.files} files changed` : ''}${r.worktree.commitError ? ` · commit failed: ${esc(r.worktree.commitError)}` : ''}</div>` : (s.worktree ? '<div class="wt">⎇ own worktree</div>' : '')}
         <div class="prompt">${esc(s.prompt)}</div>
@@ -529,6 +529,66 @@ function wireComposer(provider, cwd, resumeId, forceFork, mode) {
   $('#cText').onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go(); };
 }
 
+// ---------- roles ----------
+
+const roleById = id => S.roles.find(r => r.id === id);
+function roleOptions(selected) {
+  return '<option value="">No role</option>' + S.roles.map(r =>
+    `<option value="${esc(r.id)}" ${r.id === selected ? 'selected' : ''} title="${esc(r.description)}">${esc(r.name)} — ${PROV[r.provider]}</option>`).join('');
+}
+const roleBadge = role => role ? `<span class="rolebadge">${esc(role.name || roleById(role)?.name || role)}</span>` : '';
+
+function roleEditorHtml(r, i) {
+  const prov = Object.entries(PROV).map(([k, v]) => `<option value="${k}" ${k === r.provider ? 'selected' : ''}>${v}</option>`).join('');
+  return `
+    <div class="role" data-i="${i}" data-id="${esc(r.id || '')}">
+      <div class="srow">
+        <input data-f="name" value="${esc(r.name)}" placeholder="Name" required>
+        <select data-f="provider">${prov}</select>
+        <select data-f="mode">${modeOptions(r.mode)}</select>
+        <button type="button" class="ghost" data-rm>Remove</button>
+      </div>
+      <input data-f="description" value="${esc(r.description)}" placeholder="What it's for (shown in pickers)">
+      <textarea data-f="instructions" rows="3" placeholder="Standing instructions put in front of the step's prompt">${esc(r.instructions)}</textarea>
+    </div>`;
+}
+
+let roleDraft = [];
+function readRoles() {
+  roleDraft = [...document.querySelectorAll('#rolesList .role')].map(el => ({
+    id: el.dataset.id || undefined,
+    name: el.querySelector('[data-f=name]').value,
+    provider: el.querySelector('[data-f=provider]').value,
+    mode: el.querySelector('[data-f=mode]').value,
+    description: el.querySelector('[data-f=description]').value,
+    instructions: el.querySelector('[data-f=instructions]').value,
+  }));
+}
+function drawRoles() {
+  $('#rolesList').innerHTML = roleDraft.map(roleEditorHtml).join('');
+  document.querySelectorAll('#rolesList [data-rm]').forEach(b => {
+    b.onclick = () => { readRoles(); roleDraft.splice(Number(b.closest('.role').dataset.i), 1); drawRoles(); };
+  });
+}
+function openRoles() {
+  roleDraft = structuredClone(S.roles);
+  drawRoles();
+  $('#rolesErr').textContent = '';
+  $('#rolesDialog').showModal();
+}
+async function submitRoles(e) {
+  e.preventDefault();
+  if (e.submitter?.value === 'cancel') return $('#rolesDialog').close();
+  readRoles();
+  try {
+    S.roles = await api('/api/roles', { method: 'PUT', body: roleDraft });
+    $('#rolesDialog').close();
+    toast('Roles saved');
+  } catch (err) {
+    $('#rolesErr').textContent = err.message;
+  }
+}
+
 // ---------- new task ----------
 
 let taskProvider = 'claude';
@@ -537,6 +597,7 @@ function openTask(prefill = {}) {
   taskProvider = prefill.provider || localStorage.getItem('deck.provider') || 'claude';
   document.querySelectorAll('#taskProvider button').forEach(b => b.classList.toggle('active', b.dataset.v === taskProvider));
   f.mode.innerHTML = modeOptions(prefill.mode || localStorage.getItem('deck.mode') || 'edit');
+  f.elements.role.innerHTML = roleOptions(prefill.role?.id || prefill.role || '');
   f.cwd.value = prefill.cwd || localStorage.getItem('deck.cwd') || '';
   f.prompt.value = prefill.prompt || '';
   $('#taskErr').textContent = '';
@@ -548,7 +609,7 @@ async function submitTask(e) {
   e.preventDefault();
   if (e.submitter?.value === 'cancel') return $('#taskDialog').close();
   const f = $('#taskForm');
-  const body = { provider: taskProvider, cwd: f.cwd.value.trim(), mode: f.mode.value, prompt: f.prompt.value };
+  const body = { provider: taskProvider, cwd: f.cwd.value.trim(), mode: f.mode.value, prompt: f.prompt.value, role: f.elements.role.value || undefined };
   try {
     const r = await api('/api/runs', { method: 'POST', body });
     localStorage.setItem('deck.provider', body.provider);
@@ -566,21 +627,22 @@ async function submitTask(e) {
 
 const TEMPLATES = {
   'build-review': [
-    { provider: 'claude', mode: 'edit', prompt: 'Implement the following change. Keep it minimal and run the tests if the project has them. End with a short summary of what you changed.\n\n{{task}}' },
-    { provider: 'codex', mode: 'read', prompt: 'Another agent just changed this repo; its summary is below. Review the uncommitted diff (git diff) for bugs, missed edge cases and missing tests. Do not edit files. List concrete findings, most severe first.\n\n{{prev}}' },
+    { role: 'lead', provider: 'claude', mode: 'edit', prompt: '{{task}}' },
+    { role: 'reviewer', provider: 'codex', mode: 'read', prompt: 'Another agent just made this change. Its summary:\n\n{{prev}}' },
   ],
-  'plan-build': [
-    { provider: 'codex', mode: 'read', prompt: 'Read this codebase and write a concise, step-by-step implementation plan for the task below. Do not edit files.\n\n{{task}}' },
-    { provider: 'claude', mode: 'edit', prompt: 'Implement this plan. Keep changes minimal and run the tests if there are any.\n\n{{prev}}' },
+  'plan-build-review': [
+    { role: 'architect', provider: 'claude', mode: 'read', prompt: 'Plan this task:\n\n{{task}}' },
+    { role: 'builder', provider: 'codex', mode: 'edit', prompt: 'Task: {{task}}\n\nImplement this plan:\n\n{{prev}}' },
+    { role: 'judge', provider: 'claude', mode: 'read', prompt: 'Task: {{task}}\n\nAnother agent implemented it; its report is below. Check the uncommitted changes (git diff) against the task.\n\n{{prev}}' },
   ],
   'second-opinion': [
     { provider: 'claude', mode: 'read', prompt: '{{task}}' },
     { provider: 'codex', mode: 'read', prompt: 'Question: {{task}}\n\nAnswer it yourself first. Then compare with another agent\'s answer below and say where you agree and disagree.\n\n{{prev}}' },
   ],
   race: [
-    { provider: 'claude', mode: 'edit', worktree: true, prompt: 'Implement this. Keep it minimal, run the tests if there are any, and end with a short summary.\n\n{{task}}' },
-    { provider: 'codex', mode: 'edit', worktree: true, parallel: true, prompt: 'Implement this. Keep it minimal, run the tests if there are any, and end with a short summary.\n\n{{task}}' },
-    { provider: 'claude', mode: 'read', prompt: 'Two agents each implemented the same task on separate git branches; their summaries and branch names are below. The task was:\n\n{{task}}\n\nCompare the two diffs for correctness, simplicity and tests. Recommend which branch to merge and why, and list anything to fix first. Do not edit files.\n\n{{prev}}' },
+    { role: 'lead', provider: 'claude', mode: 'edit', worktree: true, prompt: '{{task}}' },
+    { role: 'builder', provider: 'codex', mode: 'edit', worktree: true, parallel: true, prompt: '{{task}}' },
+    { role: 'judge', provider: 'claude', mode: 'read', prompt: 'Task: {{task}}\n\nTwo agents each did this task on separate git branches (below). Compare the diffs and say which branch to merge.\n\n{{prev}}' },
   ],
 };
 
@@ -589,6 +651,7 @@ function stepHtml(s, i) {
   return `
     <li data-i="${i}" class="${s.parallel && i ? 'par' : ''}">
       <div class="srow">
+        <select data-f="role" title="Role">${roleOptions(s.role)}</select>
         <select data-f="provider">${provOpts}</select>
         <select data-f="mode">${modeOptions(s.mode)}</select>
         <button type="button" class="ghost" data-rm>Remove</button>
@@ -609,10 +672,21 @@ function readSteps() {
     prompt: li.querySelector('[data-f=prompt]').value,
     parallel: !!li.querySelector('[data-f=parallel]')?.checked,
     worktree: li.querySelector('[data-f=worktree]').checked,
+    role: li.querySelector('[data-f=role]').value || null,
   }));
 }
 function drawSteps() {
   $('#steps').innerHTML = pipeSteps.map(stepHtml).join('');
+  // Picking a role sets that role's agent and permission level (both still editable).
+  document.querySelectorAll('#steps [data-f=role]').forEach(sel => {
+    sel.onchange = () => {
+      const r = roleById(sel.value);
+      if (!r) return;
+      const li = sel.closest('li');
+      li.querySelector('[data-f=provider]').value = r.provider;
+      li.querySelector('[data-f=mode]').value = r.mode;
+    };
+  });
   document.querySelectorAll('#steps [data-f=parallel]').forEach(c => {
     c.onchange = () => c.closest('li').classList.toggle('par', c.checked);
   });
@@ -882,6 +956,20 @@ function wire() {
   $('#newTaskBtn').onclick = () => openTask();
   $('#usageBtn').onclick = () => { S.sel = { type: 'usage' }; renderList(); renderUsage(); };
   $('#setupBtn').onclick = openSetup;
+  $('#rolesBtn').onclick = openRoles;
+  $('#rolesForm').onsubmit = submitRoles;
+  $('#addRole').onclick = () => { readRoles(); roleDraft.push({ name: '', provider: 'claude', mode: 'read', description: '', instructions: '' }); drawRoles(); };
+  $('#resetRoles').onclick = async () => {
+    if (!confirm('Replace your roles with the defaults?')) return;
+    try { S.roles = await api('/api/roles/reset', { method: 'POST' }); roleDraft = structuredClone(S.roles); drawRoles(); toast('Roles reset'); } catch (e) { toast(e.message); }
+  };
+  $('#taskForm').elements.role.onchange = e => {
+    const r = roleById(e.target.value);
+    if (!r) return;
+    taskProvider = r.provider;
+    document.querySelectorAll('#taskProvider button').forEach(x => x.classList.toggle('active', x.dataset.v === r.provider));
+    $('#taskForm').mode.value = r.mode;
+  };
   $('#copyHook').onclick = () => { navigator.clipboard.writeText($('#hookSnippet').value); toast('Hook config copied'); };
   $('#awayToggle').onchange = async e => {
     try {
@@ -927,6 +1015,7 @@ async function init() {
   wire();
   try {
     S.config = await api('/api/config');
+    S.roles = await api('/api/roles');
     $('#dirs').innerHTML = S.config.dirs.map(d => `<option value="${esc(d)}">`).join('');
     const missing = Object.entries(S.config.bins).filter(([, v]) => !v).map(([k]) => PROV[k]);
     if (missing.length) toast(`${missing.join(' and ')} CLI not found — monitoring only for that agent`);

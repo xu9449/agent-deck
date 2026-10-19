@@ -4,7 +4,7 @@ A local dashboard for every coding agent on this Mac: Claude Code (terminal, rem
 
 - **Monitor**: see which sessions are working, which are idle and which are blocked waiting for you (e.g. on a permission prompt), and read each session's transcript live.
 - **Control**: start a new headless task on either agent, send a follow-up to any session, and stop a run.
-- **Orchestrate**: build pipelines where each step's answer feeds the next. For example, Claude implements a change and Codex reviews the diff. Steps can run in parallel, each on its own git worktree.
+- **Orchestrate**: build pipelines where each step's answer feeds the next. For example, Claude implements a change and Codex reviews the diff. Steps can run in parallel, each on its own git worktree, and each step can take on a **role**.
 - **Approve**: see every Claude Code permission prompt and, with Away mode on, allow or deny it from the dashboard.
 - **Usage**: tokens per day and per folder for both agents, plus how much of each plan limit you've used.
 
@@ -50,13 +50,39 @@ Permission levels, chosen for each task or step:
 
 The Codex CLI is found on `PATH`, falling back to the copy inside `ChatGPT.app`. Set `CLAUDE_BIN` or `CODEX_BIN` to override either path.
 
+## Roles
+
+A role is a standing job for an agent: a name, a default agent, a default permission level, and instructions. When a task or pipeline step uses a role, the role's instructions go in front of the step's prompt. You can still change the agent or permission level for that step.
+
+Edit roles under **Roles**; they're saved in `~/.agent-deck/roles.json`. The defaults are based on public comparisons from October 2026:
+
+| Role | Agent | Permissions | Job |
+|---|---|---|---|
+| Architect | Claude Code | read-only | Reads the code and writes a concrete plan |
+| Lead engineer | Claude Code | edit | Large multi-file changes, migrations, frontend from designs |
+| Builder | Codex | edit | Implements a given plan, cheaply and quickly |
+| Reviewer | Codex | read-only | Finds real bugs in a diff |
+| Tester | Codex | edit | Writes and runs tests; reports bugs without fixing them |
+| Judge | Claude Code | read-only | Checks the work against the task and gives a verdict |
+
+Why this split:
+
+- **Claude Code (Opus 5.5):** leads SWE-bench Pro and visual-coding benchmarks, and is strongest at long, multi-file work and at understanding existing code.
+- **Codex (GPT‑6 Astra):** close on most benchmarks at roughly half the cost per task (Vals AI: $8.21 vs $19.07 on Terminal-Bench 4.0), and is known for sharp code review.
+
+The margins are small, so treat the defaults as a starting point and use the Race template to compare the two on your own code.
+
 ## Pipelines
 
 - Steps run in order, and each step receives the previous step's final answer: put `{{prev}}` where it should go, or it's added at the end.
 - `{{task}}` is replaced with the pipeline's **Task** field, so several steps can share one task description.
 - **Run alongside previous step** puts a step in the same stage as the one before it, so they run at the same time. The next step gets all their answers.
 - **Own git worktree** runs a step on a fresh branch `deck/<pipeline>-s<n>` in `~/.agent-deck/worktrees/`, based on the folder's last commit. Uncommitted changes in your folder aren't included. When the step finishes its changes are committed on that branch, and the next step is told how to diff it. **Remove worktrees** deletes the folders but keeps the branches.
-- The **Race** template has Claude and Codex implement the same task in parallel worktrees, then has Claude judge which branch to merge.
+- Templates:
+  - **Claude builds → Codex reviews:** Lead engineer → Reviewer.
+  - **Claude plans → Codex builds → Claude reviews:** Architect → Builder → Judge. This saves Claude's limits for planning and judging.
+  - **Ask both:** a second opinion on a question.
+  - **Race in worktrees → judge:** Lead engineer and Builder do the same task in parallel worktrees, then the Judge picks which branch to merge.
 
 ## Permission prompts and Away mode
 
@@ -94,6 +120,7 @@ The dollar figure is only the API-equivalent cost that Claude reports for runs s
 |---|---|
 | `~/.agent-deck/state.json` | Run and pipeline history |
 | `~/.agent-deck/settings.json` | Away mode |
+| `~/.agent-deck/roles.json` | Your roles (missing until you edit them) |
 | `~/.agent-deck/hook-secret` | Secret for the permission hook |
 | `~/.agent-deck/worktrees/` | Pipeline worktrees |
 | `~/.agent-deck/server.log` | Server log when it runs as a login service |

@@ -254,3 +254,15 @@ table.data td.num, table.data th.num { text-align: right; }
 .limit { display: grid; gap: 6px; }
 .limit .top { display: flex; justify-content: space-between; font-size: 12.5px; }
 .limit .top span:last-child { color: var(--muted); }
+
+/* roles */
+.roles { display: grid; gap: 10px; max-height: 55vh; overflow: auto; }
+.role { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 6px; }
+.role .srow { display: flex; gap: 6px; flex-wrap: wrap; }
+.role .srow input { flex: 1; min-width: 140px; }
+.role textarea { width: 100%; }
+.rolebadge { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; background: var(--panel-2); color: var(--text); }
+.steps .srow { flex-wrap: wrap; }
+.steps li, dialog form { min-width: 0; }
+dialog select { max-width: 100%; }
+.steps select { font-size: 13px; padding: 5px 8px; }

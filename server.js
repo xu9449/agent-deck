@@ -12,6 +12,7 @@ import { listCodexAgents, readCodexTranscript, codexRolloutPath } from './lib/co
 import * as runs from './lib/runs.js';
 import * as approvals from './lib/approvals.js';
 import { usage } from './lib/usage.js';
+import * as roles from './lib/roles.js';
 
 const PORT = Number(process.env.PORT || 4545);
 const HOST = '127.0.0.1';
@@ -143,6 +144,10 @@ async function api(req, res, url) {
   }
 
   if (m === 'GET' && p === '/api/agents') return send(res, 200, agents);
+
+  if (m === 'GET' && p === '/api/roles') return send(res, 200, roles.listRoles());
+  if (m === 'PUT' && p === '/api/roles') return send(res, 200, roles.saveRoles(await readBody(req)));
+  if (m === 'POST' && p === '/api/roles/reset') return send(res, 200, roles.resetRoles());
 
   if (m === 'POST' && p === '/api/settings') return send(res, 200, approvals.setSettings(await readBody(req)));
   if (m === 'GET' && p === '/api/hook-config') {
