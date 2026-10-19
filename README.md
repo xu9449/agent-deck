@@ -77,6 +77,7 @@ The margins are small, so treat the defaults as a starting point and use the Rac
 - Steps run in order, and each step receives the previous step's final answer: put `{{prev}}` where it should go, or it's added at the end.
 - `{{task}}` is replaced with the pipeline's **Task** field, so several steps can share one task description.
 - **Run alongside previous step** puts a step in the same stage as the one before it, so they run at the same time. The next step gets all their answers.
+- **Pre-approved commands** (Claude steps only) are passed as `--allowedTools`, so a headless Claude can run e.g. `Bash(npm test:*)` without being refused. Codex steps don't need this; their sandbox already allows commands inside the folder.
 - **Own git worktree** runs a step on a fresh branch `deck/<pipeline>-s<n>` in `~/.agent-deck/worktrees/`, based on the folder's last commit. Uncommitted changes in your folder aren't included. When the step finishes its changes are committed on that branch, and the next step is told how to diff it. **Remove worktrees** deletes the folders but keeps the branches.
 - Templates:
   - **Claude builds → Codex reviews:** Lead engineer → Reviewer.

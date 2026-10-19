@@ -471,6 +471,7 @@ function pipeHtml(p) {
           <b>Step ${i + 1}</b> ${s.role ? roleBadge(roleById(s.role) || s.role) : ''} · <span class="prov ${s.provider}">${PROV[s.provider]}</span> · ${esc(S.config?.modes?.[s.mode] || s.mode)} · <span class="pill ${st}">${esc(STATUS[st] || st)}</span></div>
         ${s.parallel ? '<div><span class="tag">runs alongside the previous step</span></div>' : ''}
         ${r?.worktree ? `<div class="wt">⎇ ${esc(r.worktree.branch)} · ${r.worktree.removed ? 'worktree removed (branch kept)' : esc(r.worktree.dir.replace(/^\/Users\/[^/]+/, '~'))}${r.worktree.files != null ? ` · ${r.worktree.files} files changed` : ''}${r.worktree.commitError ? ` · commit failed: ${esc(r.worktree.commitError)}` : ''}</div>` : (s.worktree ? '<div class="wt">⎇ own worktree</div>' : '')}
+        ${s.allowedTools?.length ? `<div class="wt">pre-approved: ${esc(s.allowedTools.join(', '))}</div>` : ''}
         <div class="prompt">${esc(s.prompt)}</div>
         ${r?.finalText ? `<div class="prompt"><b>Answer:</b> ${esc(r.finalText.slice(0, 400))}${r.finalText.length > 400 ? '…' : ''}</div>` : ''}
       </div>`;
@@ -660,6 +661,7 @@ function stepHtml(s, i) {
         ${i ? `<label><input type="checkbox" data-f="parallel" ${s.parallel ? 'checked' : ''}> run alongside previous step</label>` : ''}
         <label title="Work on a fresh branch in its own git worktree, so parallel edits never collide"><input type="checkbox" data-f="worktree" ${s.worktree ? 'checked' : ''}> own git worktree</label>
       </div>
+      <textarea data-f="allowedTools" rows="1" class="mono" placeholder="Claude only: commands it may run without asking, one per line, e.g. Bash(npm test:*)">${esc((s.allowedTools || []).join('\n'))}</textarea>
       <textarea data-f="prompt" rows="4" placeholder="${i ? 'Use {{prev}} for the previous step\'s answer' : 'First step prompt'}">${esc(s.prompt)}</textarea>
     </li>`;
 }
@@ -673,6 +675,7 @@ function readSteps() {
     parallel: !!li.querySelector('[data-f=parallel]')?.checked,
     worktree: li.querySelector('[data-f=worktree]').checked,
     role: li.querySelector('[data-f=role]').value || null,
+    allowedTools: li.querySelector('[data-f=allowedTools]').value.split('\n').map(t => t.trim()).filter(Boolean),
   }));
 }
 function drawSteps() {
