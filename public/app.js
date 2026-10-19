@@ -4,11 +4,11 @@ const TOKEN = document.querySelector('meta[name=deck-token]').content;
 const $ = s => document.querySelector(s);
 const S = {
   agents: [], runs: [], pipes: [], config: null,
-  tab: 'agents', prov: 'all', q: '', showEnded: false,
+  tab: 'manager', prov: 'all', q: '', showEnded: false,
   sel: null, // { type: 'agent' | 'run' | 'pipe', id }
   run: null, // full run (with events) when a run is selected
   transcriptFor: null, transcriptAt: 0,
-  approvals: [], settings: { awayMode: false }, roles: [],
+  approvals: [], settings: { awayMode: false }, roles: [], threads: [],
   usageDays: 30, usageTable: false,
 };
 
@@ -83,6 +83,20 @@ function connect() {
     if (S.tab === 'pipelines') renderList();
     if (S.sel?.type === 'pipe' && S.sel.id === p.id) renderDetail();
   });
+  es.addEventListener('threads', e => {
+    S.threads = JSON.parse(e.data);
+    renderCounts();
+    if (S.tab === 'manager') renderList();
+    if (!S.sel) select(S.threads[0] ? 'thread' : 'newthread', S.threads[0]?.id || 'new');
+  });
+  es.addEventListener('thread', e => onThread(JSON.parse(e.data)));
+  es.addEventListener('thread-deleted', e => {
+    const { id } = JSON.parse(e.data);
+    S.threads = S.threads.filter(t => t.id !== id);
+    if (S.sel?.type === 'thread' && S.sel.id === id) select('newthread', 'new');
+    else if (S.tab === 'manager') renderList();
+    renderCounts();
+  });
   es.addEventListener('approvals', e => { S.approvals = JSON.parse(e.data); renderApprovals(); });
   es.addEventListener('approval', e => onApproval(JSON.parse(e.data)));
   es.addEventListener('settings', e => { S.settings = JSON.parse(e.data); $('#awayToggle').checked = S.settings.awayMode; });
@@ -116,7 +130,7 @@ function onRun(r) {
   const old = S.runs.find(x => x.id === r.id);
   upsert(S.runs, r);
   S.runs.sort((a, b) => b.startedAt - a.startedAt);
-  if (old?.status === 'running' && r.status !== 'running' && !r.pipelineId) {
+  if (old?.status === 'running' && r.status !== 'running' && !r.pipelineId && r.kind !== 'manager') {
     notify(`Run ${STATUS[r.status]}`, r.title, () => select('run', r.id));
   }
   renderCounts();
@@ -231,7 +245,8 @@ async function openSetup() {
 // ---------- header counts ----------
 
 function renderCounts() {
-  const c = s => S.agents.filter(a => a.status === s).length + (s === 'needs-you' ? S.approvals.filter(q => q.status === 'pending' && !agentFor(q)).length : 0);
+  const c = s => S.agents.filter(a => a.status === s).length + (s === 'needs-you'
+    ? S.approvals.filter(q => q.status === 'pending' && !agentFor(q)).length + S.threads.filter(t => t.status === 'needs-approval').length : 0);
   const running = S.runs.filter(r => r.status === 'running').length;
   $('#counts').innerHTML = [
     ['needs-you', c('needs-you'), 'need you'],
@@ -257,9 +272,12 @@ function renderList() {
   document.querySelectorAll('#tabs button').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === S.tab);
   });
+  $('#filters .chips').hidden = S.tab === 'manager';
   const ul = $('#list');
   let html = '';
-  if (S.tab === 'agents') {
+  if (S.tab === 'manager') {
+    html = threadListHtml();
+  } else if (S.tab === 'agents') {
     const list = S.agents.filter(a => (S.showEnded || a.status !== 'ended') && matches(a, ['name', 'cwd', 'lastPrompt', 'source', 'model']));
     const groups = [['needs-you', 'Needs you'], ['working', 'Working'], ['idle', 'Idle'], ['ended', 'Recent history']];
     for (const [st, label] of groups) {
@@ -296,13 +314,15 @@ function renderList() {
   ul.innerHTML = html;
   const runBadge = S.runs.filter(r => r.status === 'running').length;
   $('#tabs [data-tab=runs]').innerHTML = `Runs${runBadge ? `<span class="badge">${runBadge}</span>` : ''}`;
+  const waiting = S.threads.filter(t => t.status === 'needs-approval').length;
+  $('#tabs [data-tab=manager]').innerHTML = `Manager${waiting ? `<span class="badge">${waiting}</span>` : ''}`;
 }
 
 // ---------- selection & detail ----------
 
 function select(type, id) {
   S.sel = { type, id };
-  S.tab = { agent: 'agents', run: 'runs', pipe: 'pipelines' }[type] || S.tab;
+  S.tab = { agent: 'agents', run: 'runs', pipe: 'pipelines', thread: 'manager', newthread: 'manager' }[type] || S.tab;
   S.run = null;
   S.transcriptFor = null;
   if (type === 'agent') {
@@ -317,6 +337,11 @@ function renderDetail() {
   const d = $('#detail');
   if (!S.sel) return;
   if (S.sel.type === 'usage') return renderUsage();
+  if (S.sel.type === 'newthread') return renderNewThread();
+  if (S.sel.type === 'thread') {
+    const t = S.threads.find(x => x.id === S.sel.id);
+    return t ? renderThread(t) : renderNewThread();
+  }
   if (S.sel.type === 'agent') {
     const a = S.agents.find(x => x.key === S.sel.id);
     if (!a) { d.innerHTML = '<div class="empty">That session is gone.</div>'; return; }
@@ -698,7 +723,9 @@ function drawSteps() {
   });
 }
 
+let pipeContext = null; // { threadId, msgId } when editing a manager's plan
 function openPipeline(prefill) {
+  pipeContext = prefill?.context || null;
   const f = $('#pipeForm');
   f.name.value = prefill?.name || '';
   f.task.value = prefill?.task || '';
@@ -714,14 +741,207 @@ async function submitPipeline(e) {
   if (e.submitter?.value === 'cancel') return $('#pipeDialog').close();
   readSteps();
   const f = $('#pipeForm');
+  const plan = { name: f.name.value.trim(), cwd: f.cwd.value.trim(), task: f.task.value.trim(), steps: pipeSteps };
+  if (pipeContext) {
+    try {
+      await api(`/api/manager/threads/${pipeContext.threadId}/plans/${pipeContext.msgId}/approve`, { method: 'POST', body: { plan } });
+      $('#pipeDialog').close();
+    } catch (err) {
+      $('#pipeErr').textContent = err.message;
+    }
+    return;
+  }
   try {
-    const p = await api('/api/pipelines', { method: 'POST', body: { name: f.name.value.trim(), cwd: f.cwd.value.trim(), task: f.task.value.trim(), steps: pipeSteps } });
+    const p = await api('/api/pipelines', { method: 'POST', body: plan });
     localStorage.setItem('deck.cwd', f.cwd.value.trim());
     $('#pipeDialog').close();
     upsert(S.pipes, p);
     select('pipe', p.id);
   } catch (err) {
     $('#pipeErr').textContent = err.message;
+  }
+}
+
+// ---------- manager ----------
+
+const PLAN_STATUS = {
+  proposed: 'waiting for your approval', 'auto-running': 'running on its own (read-only)', running: 'running',
+  done: 'done', failed: 'failed', stopped: 'stopped', rejected: 'rejected', interrupted: 'interrupted',
+};
+const MODE_SHORT = { read: 'read-only', edit: 'edits files', full: 'full auto' };
+const EXAMPLES = [
+  'Explain how this project is structured and where the main logic lives',
+  'Review the latest commit for bugs',
+  'Add a feature: ',
+];
+
+function onThread(t) {
+  const old = S.threads.find(x => x.id === t.id);
+  upsert(S.threads, t);
+  S.threads.sort((a, b) => b.updatedAt - a.updatedAt);
+  const last = t.messages[t.messages.length - 1];
+  const isNew = old && old.messages.length < t.messages.length && last?.role === 'manager';
+  if (isNew && last.plan?.status === 'proposed' && !last.plan.auto) {
+    notify('Manager needs your approval', last.plan.name, () => select('thread', t.id));
+  } else if (isNew && document.hidden) {
+    notify('Manager replied', t.title, () => select('thread', t.id));
+  }
+  renderCounts();
+  if (S.tab === 'manager') renderList();
+  if (S.sel?.type === 'thread' && S.sel.id === t.id) updateThread(t);
+}
+
+function threadListHtml() {
+  const items = S.threads.filter(t => matches({ ...t, provider: S.prov === 'all' ? 'all' : S.prov }, ['title', 'cwd'])).map(t => `
+    <li class="item ${S.sel?.type === 'thread' && S.sel.id === t.id ? 'sel' : ''}" data-type="thread" data-id="${t.id}">
+      <span class="dot ${t.status === 'needs-approval' ? 'needs-you' : t.status === 'thinking' || t.status === 'working' ? 'working' : 'idle'}"></span>
+      <span class="name">${esc(t.title)}</span>
+      <span class="time">${ago(t.updatedAt)}</span>
+      <span class="sub"><span>${esc(t.status === 'needs-approval' ? 'needs your approval' : t.status)}</span><span>· ${esc(base(t.cwd))}</span></span>
+    </li>`).join('');
+  return `<li class="item new ${S.sel?.type === 'newthread' ? 'sel' : ''}" data-type="newthread" data-id="new"><span></span><span class="name">＋ New conversation</span></li>${items}`;
+}
+
+function planHtml(m) {
+  const p = m.plan;
+  const status = p.status === 'proposed' && p.auto ? 'starting…' : PLAN_STATUS[p.status] || p.status;
+  const pillCls = p.status === 'proposed' ? 'needs-you' : p.status === 'done' ? 'done' : ['running', 'auto-running'].includes(p.status) ? 'running' : p.status;
+  const steps = p.steps.map(s => `
+    <li>${s.role ? roleBadge(roleById(s.role) || s.role) : ''} <span class="prov ${s.provider}">${PROV[s.provider]}</span>
+      <span class="hint">${MODE_SHORT[s.mode]}${s.parallel ? ' · alongside the previous step' : ''}${s.worktree ? ' · own git branch' : ''}${s.allowedTools?.length ? ` · may run ${esc(s.allowedTools.join(', '))}` : ''}</span>
+      <details><summary>Prompt</summary><pre>${esc(s.prompt)}</pre></details></li>`).join('');
+  return `
+    <div class="plan ${p.status}" data-msg="${m.id}">
+      <div class="ptop"><b>${esc(p.name)}</b><span class="pill ${pillCls}">${esc(status)}</span>
+        ${p.readOnly ? '<span class="tag">read-only</span>' : '<span class="tag edit">changes code</span>'}${p.edited ? '<span class="tag">edited by you</span>' : ''}</div>
+      ${p.summary ? `<div class="psum">${esc(p.summary)}</div>` : ''}
+      <ol>${steps}</ol>
+      ${p.editsInPlace ? '<div class="warn">This folder isn\'t a git repository, so these edits happen directly in it.</div>' : ''}
+      ${p.note ? `<div class="warn">${esc(p.note)}</div>` : ''}
+      ${p.error ? `<div class="warn">Couldn't start: ${esc(p.error)}</div>` : ''}
+      <div class="btns">
+        ${p.status === 'proposed' ? `<button class="primary" data-plan-act="approve">Approve &amp; run</button><button data-plan-act="edit">Edit…</button><button class="ghost" data-plan-act="reject">Reject</button>` : ''}
+        ${p.pipelineId ? `<button data-plan-act="open">Open pipeline</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function threadMessagesHtml(t) {
+  const html = t.messages.map(m => {
+    if (m.role === 'user') return `<div class="msg user">${md(m.text)}</div>`;
+    if (m.role === 'system') return `<div class="msg info">${esc(m.text)}${m.pipelineId ? ` <button class="linkish" data-open-pipe="${m.pipelineId}">open pipeline</button>` : ''}</div>`;
+    return `${m.text ? `<div class="msg text">${md(m.text)}</div>` : ''}${m.plan ? planHtml(m) : ''}${m.planError ? `<div class="msg error">The manager's plan couldn't be used: ${esc(m.planError)}</div>` : ''}`;
+  }).join('');
+  const thinking = t.status === 'thinking'
+    ? `<div class="msg info thinking">Manager is thinking…${t.runId ? ` <button class="linkish" data-open-run="${t.runId}">watch</button>` : ''}</div>` : '';
+  return html + thinking;
+}
+
+function threadMeta(t) {
+  const label = { 'needs-approval': 'needs your approval', thinking: 'thinking', working: 'team is working', idle: 'idle' }[t.status] || t.status;
+  return `<span class="pill ${t.status === 'needs-approval' ? 'needs-you' : t.status === 'idle' ? '' : 'working'}">${esc(label)}</span>
+    <span class="mono">${esc(t.cwd.replace(/^\/Users\/[^/]+/, '~'))}</span><span>started ${ago(t.createdAt)} ago</span>`;
+}
+
+function renderThread(t) {
+  $('#detail').innerHTML = `
+    <div class="dhead">
+      <h2>${esc(t.title)}</h2>
+      <div class="meta" id="tmeta">${threadMeta(t)}</div>
+    </div>
+    <div class="stream chat" id="stream"></div>
+    <div class="composer">
+      <textarea id="mText" placeholder="Tell the manager what you want… (⌘↵ to send)"></textarea>
+      <div class="row">
+        <span class="note">Questions and small read-only jobs run on their own. Anything that changes code waits for your approval and goes on its own git branch.</span>
+        <button class="ghost danger" id="mDelete">Delete</button>
+        <button class="primary" id="mSend">Send</button>
+      </div>
+    </div>`;
+  updateThread(t, true);
+  const send = async () => {
+    const text = $('#mText').value.trim();
+    if (!text) return;
+    $('#mSend').disabled = true;
+    try {
+      await api(`/api/manager/threads/${t.id}/messages`, { method: 'POST', body: { text } });
+      $('#mText').value = '';
+    } catch (e) { toast(e.message); }
+    $('#mSend').disabled = false;
+  };
+  $('#mSend').onclick = send;
+  $('#mText').onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); };
+  $('#mDelete').onclick = async () => {
+    if (!confirm('Delete this conversation? Pipelines it started are kept.')) return;
+    try { await api(`/api/manager/threads/${t.id}`, { method: 'DELETE' }); } catch (e) { toast(e.message); }
+  };
+}
+
+function updateThread(t, first = false) {
+  const stream = $('#stream');
+  if (!stream) return;
+  const stick = first || atBottom(stream);
+  stream.innerHTML = threadMessagesHtml(t);
+  if (stick) stream.scrollTop = stream.scrollHeight;
+  const meta = $('#tmeta');
+  if (meta) meta.innerHTML = threadMeta(t);
+}
+
+function renderNewThread() {
+  const cwd = localStorage.getItem('deck.cwd') || '';
+  $('#detail').innerHTML = `
+    <div class="newthread">
+      <h2>Talk to the manager</h2>
+      <p>Describe what you want in plain words. The manager reads the project, answers questions itself, and turns real work into a plan for Claude Code and Codex. It then reports back with the results.</p>
+      <p>Questions and small read-only jobs, like reviews and investigations, start on their own. Anything that changes code waits for your approval and runs on its own git branch, never your main checkout.</p>
+      <label>Project folder <input id="ntCwd" list="dirs" value="${esc(cwd)}" placeholder="~/Developer/my-project"></label>
+      <textarea id="ntText" placeholder="e.g. Add a weekly email summary of trades"></textarea>
+      <div class="examples">${EXAMPLES.map(x => `<button class="chip" data-example="${esc(x)}">${esc(x.replace(/: $/, '…'))}</button>`).join('')}</div>
+      <div><button class="primary" id="ntGo">Send to the manager</button></div>
+    </div>`;
+  document.querySelectorAll('[data-example]').forEach(b => {
+    b.onclick = () => { const ta = $('#ntText'); ta.value = b.dataset.example; ta.focus(); };
+  });
+  const go = async () => {
+    const body = { cwd: $('#ntCwd').value.trim(), text: $('#ntText').value.trim() };
+    if (!body.cwd || !body.text) return toast('Pick a folder and say what you want');
+    $('#ntGo').disabled = true;
+    try {
+      const t = await api('/api/manager/threads', { method: 'POST', body });
+      localStorage.setItem('deck.cwd', body.cwd);
+      upsert(S.threads, t);
+      select('thread', t.id);
+    } catch (e) {
+      toast(e.message);
+      $('#ntGo').disabled = false;
+    }
+  };
+  $('#ntGo').onclick = go;
+  $('#ntText').onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go(); };
+  $('#ntText').focus();
+}
+
+// Plan buttons, system-message links and "watch" inside a conversation.
+async function onThreadClick(e) {
+  if (S.sel?.type !== 'thread') return;
+  const t = S.threads.find(x => x.id === S.sel.id);
+  const pipeBtn = e.target.closest('[data-open-pipe]');
+  if (pipeBtn) return select('pipe', pipeBtn.dataset.openPipe);
+  const runBtn = e.target.closest('[data-open-run]');
+  if (runBtn) return select('run', runBtn.dataset.openRun);
+  const b = e.target.closest('[data-plan-act]');
+  if (!b || !t) return;
+  const msgId = b.closest('[data-msg]').dataset.msg;
+  const plan = t.messages.find(m => m.id === msgId)?.plan;
+  const act = b.dataset.planAct;
+  if (act === 'open') return select('pipe', plan.pipelineId);
+  if (act === 'edit') return openPipeline({ ...plan, context: { threadId: t.id, msgId } });
+  b.disabled = true;
+  try {
+    await api(`/api/manager/threads/${t.id}/plans/${msgId}/${act}`, { method: 'POST', body: {} });
+  } catch (err) {
+    toast(err.message);
+    b.disabled = false;
   }
 }
 
@@ -992,6 +1212,7 @@ function wire() {
   };
   $('#approvals').onclick = onAnswer;
   $('#detail').addEventListener('click', e => { if (e.target.closest('#banner')) onAnswer(e); });
+  $('#detail').addEventListener('click', onThreadClick);
   $('#newPipelineBtn').onclick = () => openPipeline();
   $('#taskForm').onsubmit = submitTask;
   $('#pipeForm').onsubmit = submitPipeline;

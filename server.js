@@ -13,6 +13,7 @@ import * as runs from './lib/runs.js';
 import * as approvals from './lib/approvals.js';
 import { usage } from './lib/usage.js';
 import * as roles from './lib/roles.js';
+import * as manager from './lib/manager.js';
 
 const PORT = Number(process.env.PORT || 4545);
 const HOST = '127.0.0.1';
@@ -73,6 +74,8 @@ runs.bus.on('run-event', e => broadcast('run-event', e));
 runs.bus.on('pipeline', p => broadcast('pipeline', p));
 approvals.bus.on('request', r => { broadcast('approval', r); refreshAgents(); });
 approvals.bus.on('settings', s => broadcast('settings', s));
+manager.bus.on('thread', t => broadcast('thread', t));
+manager.bus.on('thread-deleted', d => broadcast('thread-deleted', d));
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 20000);
 
 // ---------- helpers ----------
@@ -133,6 +136,7 @@ async function api(req, res, url) {
     res.write(`event: pipelines\ndata: ${JSON.stringify(runs.listPipelines())}\n\n`);
     res.write(`event: approvals\ndata: ${JSON.stringify(approvals.listRequests())}\n\n`);
     res.write(`event: settings\ndata: ${JSON.stringify(approvals.getSettings())}\n\n`);
+    res.write(`event: threads\ndata: ${JSON.stringify(manager.listThreads())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
@@ -144,6 +148,18 @@ async function api(req, res, url) {
   }
 
   if (m === 'GET' && p === '/api/agents') return send(res, 200, agents);
+
+  if (m === 'GET' && p === '/api/manager') return send(res, 200, manager.listThreads());
+  if (m === 'POST' && p === '/api/manager/threads') return send(res, 201, manager.newThread(await readBody(req)));
+  let tm = p.match(/^\/api\/manager\/threads\/([\w-]+)$/);
+  if (m === 'DELETE' && tm) return send(res, 200, { deleted: manager.deleteThread(tm[1]) });
+  tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/messages$/);
+  if (m === 'POST' && tm) return send(res, 200, manager.say(tm[1], (await readBody(req)).text));
+  tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/plans\/([\w-]+)\/(approve|reject)$/);
+  if (m === 'POST' && tm) {
+    const body = await readBody(req);
+    return send(res, 200, tm[3] === 'approve' ? manager.approve(tm[1], tm[2], body.plan) : manager.reject(tm[1], tm[2]));
+  }
 
   if (m === 'GET' && p === '/api/roles') return send(res, 200, roles.listRoles());
   if (m === 'PUT' && p === '/api/roles') return send(res, 200, roles.saveRoles(await readBody(req)));

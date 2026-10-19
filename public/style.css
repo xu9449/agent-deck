@@ -266,3 +266,30 @@ table.data td.num, table.data th.num { text-align: right; }
 .steps li, dialog form { min-width: 0; }
 dialog select { max-width: 100%; }
 .steps select { font-size: 13px; padding: 5px 8px; }
+
+/* manager */
+.chat .msg.user { max-width: 70%; }
+.chat .msg.text { max-width: 880px; }
+.msg.thinking { display: flex; gap: 8px; align-items: center; }
+.msg.thinking::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--working); animation: pulse 1.6s infinite; }
+.linkish { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font-size: inherit; }
+.plan { flex-shrink: 0; max-width: 880px; border: 1px solid var(--border); border-left: 3px solid var(--accent); background: var(--panel); border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; }
+.plan.proposed { border-left-color: var(--needs); }
+.plan .ptop { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.plan .ptop b { font-size: 14.5px; }
+.plan .psum { color: var(--muted); font-size: 13px; }
+.plan ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; }
+.plan li .hint { font-size: 12px; }
+.plan details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.plan details pre { white-space: pre-wrap; background: var(--code-bg); padding: 8px; border-radius: 6px; font-size: 12px; margin: 4px 0 0; }
+.plan .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.plan .warn { color: var(--needs); font-size: 12.5px; }
+.tag.edit { background: color-mix(in srgb, var(--needs) 18%, var(--panel)); color: var(--text); }
+.newthread { margin: auto; width: min(680px, 100%); padding: 24px 20px; display: grid; gap: 12px; }
+.newthread h2 { margin: 0; }
+.newthread p { margin: 0; color: var(--muted); }
+.newthread label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.newthread input, .newthread textarea { padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 14px; }
+.newthread textarea { resize: vertical; min-height: 110px; }
+.examples { display: flex; gap: 6px; flex-wrap: wrap; }
+.item.new .name { color: var(--accent); }

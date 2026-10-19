@@ -3,6 +3,7 @@
 A local dashboard for every coding agent on this Mac: Claude Code (terminal, remote control, Claude desktop) and Codex (the Codex tab in the ChatGPT app, the CLI and the IDE extension). From one page you can:
 
 - **Monitor**: see which sessions are working, which are idle and which are blocked waiting for you (e.g. on a permission prompt), and read each session's transcript live.
+- **Manager**: describe what you want in plain words. The manager reads the project, answers questions itself, and turns work into a plan for the team. Small read-only plans run on their own; anything that changes code waits for your approval. When the work is done, it reports back.
 - **Control**: start a new headless task on either agent, send a follow-up to any session, and stop a run.
 - **Orchestrate**: build pipelines where each step's answer feeds the next. For example, Claude implements a change and Codex reviews the diff. Steps can run in parallel, each on its own git worktree, and each step can take on a **role**.
 - **Approve**: see every Claude Code permission prompt and, with Away mode on, allow or deny it from the dashboard.
@@ -49,6 +50,21 @@ Permission levels, chosen for each task or step:
 | Full auto | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` |
 
 The Codex CLI is found on `PATH`, falling back to the copy inside `ChatGPT.app`. Set `CLAUDE_BIN` or `CODEX_BIN` to override either path.
+
+## Manager
+
+The **Manager** tab is where you talk to the team lead. Each conversation is a Claude Code session that keeps its memory between messages and is tied to one project folder.
+
+- **Questions:** it answers questions about the project itself by reading the code. It can read files and run read-only commands; its file-editing tools are switched off.
+- **Plans:** for real work it proposes a plan, shown as a card: a pipeline of roles (see below), with each step's agent, permissions and prompt. It's told who is good at what, and how much of each plan limit is used right now, so it can save Claude's limits.
+- **When a plan runs on its own:** if every step is read-only (no edits, no branches, no pre-approved commands) and there are at most 3 steps. Reviews, investigations and second opinions are like that.
+- **When it waits for you:** for everything else. **Approve & run**, **Edit…** (opens the pipeline editor), or **Reject**.
+- **Code changes always go on their own git branch**, even if the plan forgot to say so, so your checkout is never touched.
+- **Reports:** when a plan finishes, its results go back to the manager, which tells you what happened, what changed (branch names), test results, problems, and what it recommends next.
+- **What it never does:** merge into your main branch, push, deploy or restart services. It recommends those as next steps for you.
+- **No loops:** it can start read-only plans on its own at most twice per message from you.
+
+Conversations are saved in `~/.agent-deck/manager.json`. The manager's own turns show up in **Runs** as "Manager · …".
 
 ## Roles
 
@@ -121,6 +137,7 @@ The dollar figure is only the API-equivalent cost that Claude reports for runs s
 |---|---|
 | `~/.agent-deck/state.json` | Run and pipeline history |
 | `~/.agent-deck/settings.json` | Away mode |
+| `~/.agent-deck/manager.json` | Manager conversations |
 | `~/.agent-deck/roles.json` | Your roles (missing until you edit them) |
 | `~/.agent-deck/hook-secret` | Secret for the permission hook |
 | `~/.agent-deck/worktrees/` | Pipeline worktrees |
