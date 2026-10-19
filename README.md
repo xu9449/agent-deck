@@ -4,20 +4,24 @@ A local dashboard for every coding agent on this Mac: Claude Code (terminal, rem
 
 - **Monitor**: see which sessions are working, which are idle and which are blocked waiting for you (e.g. on a permission prompt), and read each session's transcript live.
 - **Control**: start a new headless task on either agent, send a follow-up to any session, and stop a run.
-- **Orchestrate**: build pipelines where each step's answer feeds the next. For example, Claude implements a change and Codex reviews the diff, or Codex plans and Claude builds.
+- **Orchestrate**: build pipelines where each step's answer feeds the next. For example, Claude implements a change and Codex reviews the diff. Steps can run in parallel, each on its own git worktree.
+- **Approve**: see every Claude Code permission prompt and, with Away mode on, allow or deny it from the dashboard.
+- **Usage**: tokens per day and per folder for both agents, plus how much of each plan limit you've used.
 
 It has no dependencies and no build step. It needs Node 22.13 or later, which has SQLite built in.
 
 ```sh
-npm start            # → http://localhost:4545
-PORT=5000 npm start  # different port
+npm start                  # → http://localhost:4545
+PORT=5000 npm start        # different port
+npm run service:install    # start at login and restart on crash (LaunchAgent)
+npm run service:uninstall  # remove that again
 ```
 
 Turn on **🔔 Notify** to get a desktop notification when an agent starts waiting for you or a run finishes.
 
 ## Where the data comes from
 
-| Agent | Live status | Transcript |
+| Agent | Live status | Transcript and usage |
 |---|---|---|
 | Claude Code | `~/.claude/sessions/<pid>.json` (busy / idle / waiting, plus `waitingFor`) | `~/.claude/projects/<dir>/<session>.jsonl` |
 | Codex | Last turn event in the rollout log | `~/.codex/state_5.sqlite` → `threads.rollout_path` |
@@ -46,33 +50,63 @@ Permission levels, chosen for each task or step:
 
 The Codex CLI is found on `PATH`, falling back to the copy inside `ChatGPT.app`. Set `CLAUDE_BIN` or `CODEX_BIN` to override either path.
 
-Run history is kept in `~/.agent-deck/state.json`.
+## Pipelines
+
+- Steps run in order, and each step receives the previous step's final answer: put `{{prev}}` where it should go, or it's added at the end.
+- `{{task}}` is replaced with the pipeline's **Task** field, so several steps can share one task description.
+- **Run alongside previous step** puts a step in the same stage as the one before it, so they run at the same time. The next step gets all their answers.
+- **Own git worktree** runs a step on a fresh branch `deck/<pipeline>-s<n>` in `~/.agent-deck/worktrees/`, based on the folder's last commit. Uncommitted changes in your folder aren't included. When the step finishes its changes are committed on that branch, and the next step is told how to diff it. **Remove worktrees** deletes the folders but keeps the branches.
+- The **Race** template has Claude and Codex implement the same task in parallel worktrees, then has Claude judge which branch to merge.
+
+## Permission prompts and Away mode
+
+Claude Code runs a `PermissionRequest` hook before it shows a permission prompt. Agent Deck receives these prompts at `POST /hooks/permission`:
+
+- **Away mode off:** Agent Deck replies at once, so Claude's own prompt appears as usual. The dashboard lists what's waiting.
+- **Away mode on:** the prompt waits in the dashboard, with **Allow**, **Deny…** (you can tell Claude why) and **Answer in Claude**. If nobody answers within about 10 minutes, Claude's own prompt appears. Turning Away mode off sends every waiting prompt back to Claude.
+- **Agent Deck not running:** the hook fails quietly and Claude asks as usual, so nothing gets stuck.
+
+The hook also fires for tasks you start from Agent Deck. With Away mode on, a task in "Edit files" mode can ask you before running a command, instead of having it refused automatically.
+
+**Setup:** Agent Deck doesn't edit your Claude settings for you. Open **Setup** in the dashboard, copy the hook config, and merge it into `~/.claude/settings.json`. The config includes a secret (stored in `~/.agent-deck/hook-secret`) so that only your Claude sessions can post prompts. Running sessions reload settings on their own. To turn it off, remove that `PermissionRequest` entry.
+
+Codex runs started from Agent Deck don't ask for approval; their sandbox level decides what they're allowed to do.
+
+## Usage
+
+Agent Deck reads token counts from the same logs it uses for transcripts:
+
+- Claude: `message.usage` in each transcript, counted once per API response.
+- Codex: `token_count` events.
+
+"Tokens" means new input plus cache writes plus output. Cache reads are shown separately because they're far larger and much cheaper.
+
+Plan limits come from the most recent reading:
+
+- Codex's 5-hour and weekly windows are recorded in its logs.
+- Claude's 5-hour and 7-day windows come from the last Claude run started from Agent Deck.
+
+The dollar figure is only the API-equivalent cost that Claude reports for runs started from Agent Deck.
+
+## Files
+
+| Path | What's in it |
+|---|---|
+| `~/.agent-deck/state.json` | Run and pipeline history |
+| `~/.agent-deck/settings.json` | Away mode |
+| `~/.agent-deck/hook-secret` | Secret for the permission hook |
+| `~/.agent-deck/worktrees/` | Pipeline worktrees |
+| `~/.agent-deck/server.log` | Server log when it runs as a login service |
+
+After pulling changes, run `launchctl kickstart -k gui/$(id -u)/dev.agent-deck` to restart the login service.
 
 ## Security
 
 - The server listens on `127.0.0.1` only.
 - Every `/api` call needs a random token that changes on each launch and is embedded in the page.
-- Requests are rejected unless the `Host` is `localhost`, and cross-site `Origin`s are rejected too. This blocks other websites and DNS-rebinding attacks from starting agents.
+- Requests are rejected unless the `Host` is `localhost`, and cross-site `Origin`s are rejected too. This blocks other websites and DNS-rebinding attacks from starting agents or answering prompts.
+- The permission hook endpoint needs its own secret, the `x-deck-hook` header.
 - Transcripts are looked up by session id, never by a path the client sends.
-
-## Start at login (optional)
-
-```sh
-cat > ~/Library/LaunchAgents/dev.agent-deck.plist <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.agent-deck</string>
-  <key>ProgramArguments</key><array>
-    <string>$(which node)</string><string>--no-warnings=ExperimentalWarning</string><string>$PWD/server.js</string>
-  </array>
-  <key>WorkingDirectory</key><string>$PWD</string>
-  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/.agent-deck/server.log</string>
-</dict></plist>
-EOF
-launchctl load ~/Library/LaunchAgents/dev.agent-deck.plist
-```
 
 ## Similar open-source projects
 

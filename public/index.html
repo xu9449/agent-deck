@@ -13,6 +13,11 @@
     <div class="brand"><span class="logo"></span>Agent Deck</div>
     <div class="counts" id="counts"></div>
     <div class="actions">
+      <label class="switch" title="Hold Claude Code permission prompts until you answer them here">
+        <input type="checkbox" id="awayToggle"><span class="track"></span> Away mode
+      </label>
+      <button class="ghost" id="usageBtn">Usage</button>
+      <button class="ghost" id="setupBtn" title="Connect permission prompts">Setup</button>
       <button class="ghost" id="notifyBtn" title="Desktop notifications when an agent needs you or a run ends">🔔 Notify</button>
       <button class="ghost" id="newPipelineBtn">New pipeline</button>
       <button class="primary" id="newTaskBtn">New task</button>
@@ -21,6 +26,7 @@
 
   <main class="layout">
     <aside class="sidebar">
+      <div id="approvals" class="approvals"></div>
       <nav class="tabs" id="tabs">
         <button data-tab="agents" class="active">Agents</button>
         <button data-tab="runs">Runs</button>
@@ -69,15 +75,35 @@
         <button type="button" data-tpl="build-review" class="chip">Claude builds → Codex reviews</button>
         <button type="button" data-tpl="plan-build" class="chip">Codex plans → Claude builds</button>
         <button type="button" data-tpl="second-opinion" class="chip">Ask both</button>
+        <button type="button" data-tpl="race" class="chip">Race in worktrees → judge</button>
       </div>
       <div class="row">
         <label>Name <input name="name" placeholder="optional"></label>
         <label>Folder <input name="cwd" list="dirs" required placeholder="~/Developer/my-project"></label>
       </div>
+      <label>Task <span class="hint">— used wherever a step says <code>{{task}}</code></span>
+        <textarea name="task" rows="3" placeholder="e.g. Add a dark-mode toggle to the settings page"></textarea></label>
       <ol id="steps" class="steps"></ol>
       <button type="button" class="ghost" id="addStep">+ Add step</button>
       <p class="err" id="pipeErr"></p>
       <footer><button value="cancel" formnovalidate class="ghost">Cancel</button><button class="primary" value="go">Run pipeline</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="setupDialog">
+    <form method="dialog">
+      <h3>Answer permission prompts from here</h3>
+      <p class="hint">Claude Code asks a <b>PermissionRequest hook</b> before it shows a permission prompt. Add the hook below to your Claude Code settings and Agent Deck can see every prompt. With <b>Away mode</b> on, you can also allow or deny them here.</p>
+      <ul class="hint">
+        <li><b>Away mode off:</b> prompts show in Claude as usual; Agent Deck only lists them.</li>
+        <li><b>Away mode on:</b> Claude's prompt waits up to ~10 minutes for your answer here, then falls back to its own dialog.</li>
+        <li><b>Agent Deck not running:</b> the hook fails quietly and Claude asks as usual. Nothing gets stuck.</li>
+      </ul>
+      <div id="hookStatus" class="hint"></div>
+      <label>Merge this into <span class="mono" id="hookFile"></span> (keep any hooks you already have)
+        <textarea id="hookSnippet" rows="12" readonly class="mono"></textarea></label>
+      <p class="hint">Running sessions reload settings on their own. To remove it later, delete this <code>PermissionRequest</code> entry.</p>
+      <footer><button type="button" class="ghost" id="copyHook">Copy</button><button value="close" class="primary">Done</button></footer>
     </form>
   </dialog>
 

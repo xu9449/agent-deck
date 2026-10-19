@@ -10,16 +10,20 @@ import { fileURLToPath } from 'node:url';
 import { listClaudeAgents, readClaudeTranscript, claudeTranscriptPath } from './lib/claude.js';
 import { listCodexAgents, readCodexTranscript, codexRolloutPath } from './lib/codex.js';
 import * as runs from './lib/runs.js';
+import * as approvals from './lib/approvals.js';
+import { usage } from './lib/usage.js';
 
 const PORT = Number(process.env.PORT || 4545);
 const HOST = '127.0.0.1';
 const TOKEN = crypto.randomBytes(24).toString('hex');
 const PUBLIC = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const TICK_MS = 2000;
+const HOOK_SECRET = approvals.hookSecret();
 
 // ---------- agent snapshot ----------
 
 let agents = [];
+let lastHookAt = null;
 let agentsJson = '[]';
 
 function refreshAgents() {
@@ -37,6 +41,15 @@ function refreshAgents() {
       if (r.status === 'running') { a.status = 'working'; a.live = true; }
     }
   }
+  const reqs = approvals.listRequests();
+  for (const q of reqs) {
+    if (q.status !== 'pending' && q.status !== 'in-app') continue;
+    const a = list.find(x => x.provider === 'claude' && x.id === q.sessionId);
+    if (!a) continue;
+    a.permission = { id: q.id, tool: q.tool, summary: q.summary, held: q.held };
+    if (q.status === 'pending') { a.status = 'needs-you'; a.waitingFor = `approve ${q.tool}`; }
+  }
+  approvals.reconcile(new Set(list.filter(a => a.status === 'needs-you').map(a => a.id)));
   list.sort((a, b) => rank(a) - rank(b) || (b.updatedAt || 0) - (a.updatedAt || 0));
   const json = JSON.stringify(list);
   if (json !== agentsJson) {
@@ -57,6 +70,8 @@ function broadcast(event, data) {
 runs.bus.on('run', r => broadcast('run', r));
 runs.bus.on('run-event', e => broadcast('run-event', e));
 runs.bus.on('pipeline', p => broadcast('pipeline', p));
+approvals.bus.on('request', r => { broadcast('approval', r); refreshAgents(); });
+approvals.bus.on('settings', s => broadcast('settings', s));
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 20000);
 
 // ---------- helpers ----------
@@ -66,12 +81,12 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req) {
+async function readBody(req, limit = 1024 * 1024) {
   let size = 0;
   const chunks = [];
   for await (const c of req) {
     size += c.length;
-    if (size > 1024 * 1024) throw new Error('request too large');
+    if (size > limit) throw new Error('request too large');
     chunks.push(c);
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
@@ -115,6 +130,8 @@ async function api(req, res, url) {
     res.write(`event: agents\ndata: ${agentsJson}\n\n`);
     res.write(`event: runs\ndata: ${JSON.stringify(runs.listRuns())}\n\n`);
     res.write(`event: pipelines\ndata: ${JSON.stringify(runs.listPipelines())}\n\n`);
+    res.write(`event: approvals\ndata: ${JSON.stringify(approvals.listRequests())}\n\n`);
+    res.write(`event: settings\ndata: ${JSON.stringify(approvals.getSettings())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
@@ -126,6 +143,22 @@ async function api(req, res, url) {
   }
 
   if (m === 'GET' && p === '/api/agents') return send(res, 200, agents);
+
+  if (m === 'POST' && p === '/api/settings') return send(res, 200, approvals.setSettings(await readBody(req)));
+  if (m === 'GET' && p === '/api/hook-config') {
+    return send(res, 200, {
+      file: '~/.claude/settings.json',
+      snippet: { hooks: { PermissionRequest: [{ matcher: '*', hooks: [{ type: 'http', url: `http://localhost:${PORT}/hooks/permission`, timeout: 600, headers: { 'x-deck-hook': HOOK_SECRET } }] }] } },
+      lastSeen: lastHookAt,
+    });
+  }
+  let am = p.match(/^\/api\/approvals\/([\w-]+)$/);
+  if (m === 'POST' && am) {
+    const { behavior, message } = await readBody(req);
+    return send(res, 200, { ok: approvals.decide(am[1], behavior, message) });
+  }
+
+  if (m === 'GET' && p === '/api/usage') return send(res, 200, usage(Math.min(Number(url.searchParams.get('days')) || 30, 180), runs.latestRateLimit()));
 
   if (m === 'GET' && p === '/api/transcript') {
     const provider = url.searchParams.get('provider');
@@ -153,6 +186,8 @@ async function api(req, res, url) {
   if (m === 'POST' && p === '/api/pipelines') return send(res, 201, runs.startPipeline(await readBody(req)));
   mm = p.match(/^\/api\/pipelines\/([\w-]+)\/stop$/);
   if (m === 'POST' && mm) return send(res, 200, { stopped: runs.stopPipeline(mm[1]) });
+  mm = p.match(/^\/api\/pipelines\/([\w-]+)\/cleanup$/);
+  if (m === 'POST' && mm) return send(res, 200, runs.removeWorktrees(mm[1]));
 
   // Reveal a session's folder in Finder; only folders that belong to a known agent.
   if (m === 'POST' && p === '/api/reveal') {
@@ -169,6 +204,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (!hostOk(req)) return send(res, 403, { error: 'bad host' });
   try {
+    if (url.pathname === '/hooks/permission' && req.method === 'POST') {
+      const given = String(req.headers['x-deck-hook'] || '');
+      if (given.length !== HOOK_SECRET.length || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(HOOK_SECRET))) {
+        return send(res, 403, { error: 'bad hook secret' });
+      }
+      lastHookAt = Date.now();
+      return approvals.onPermissionRequest(await readBody(req, 8 * 1024 * 1024), res);
+    }
     if (url.pathname.startsWith('/api/')) {
       if (!originOk(req) || !tokenOk(req, url)) return send(res, 403, { error: 'forbidden' });
       return await api(req, res, url);
