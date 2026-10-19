@@ -1,0 +1,11 @@
+{
+  "name": "agent-deck",
+  "version": "0.1.0",
+  "description": "Local dashboard to monitor, control and chain Claude Code and Codex agents",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning server.js"
+  }
+}
