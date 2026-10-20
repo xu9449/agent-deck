@@ -124,10 +124,13 @@ Agent Deck reads token counts from the same logs it uses for transcripts:
 
 "Tokens" means new input plus cache writes plus output. Cache reads are shown separately because they're far larger and much cheaper.
 
+**How much is left** is shown in the header for each agent: the share of the 5-hour window left, plus the weekly window. Hover for reset times; click to open Usage. Neither plan publishes a token allowance, only the share of each window used, so this is a percentage, not a token count. The Usage page also breaks down tokens **by model** (e.g. `claude-opus-5-5`, `gpt-6-astra`), and groups throwaway folders (Claude desktop scratch folders, pipeline worktrees) into one row each.
+
 Plan limits come from the most recent reading:
 
 - Codex's 5-hour and weekly windows are recorded in its logs.
-- Claude's 5-hour and 7-day windows come from the last Claude run started from Agent Deck.
+- Claude's 5-hour and 7-day windows come from the last Claude run started from Agent Deck. When you open Usage and that reading is more than 30 minutes old, or when you click **Check Claude now**, Agent Deck asks a tiny one-word question with Haiku, without saving a session, just to read the current numbers.
+- If a window's reset time has passed since the last reading, it shows as "~100% left".
 
 The dollar figure is only the API-equivalent cost that Claude reports for runs started from Agent Deck.
 

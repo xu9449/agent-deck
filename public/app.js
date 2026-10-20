@@ -8,7 +8,7 @@ const S = {
   sel: null, // { type: 'agent' | 'run' | 'pipe', id }
   run: null, // full run (with events) when a run is selected
   transcriptFor: null, transcriptAt: 0,
-  approvals: [], settings: { awayMode: false }, roles: [], threads: [],
+  approvals: [], settings: { awayMode: false }, roles: [], threads: [], limits: null,
   usageDays: 30, usageTable: false,
 };
 
@@ -96,6 +96,12 @@ function connect() {
     if (S.sel?.type === 'thread' && S.sel.id === id) select('newthread', 'new');
     else if (S.tab === 'manager') renderList();
     renderCounts();
+  });
+  es.addEventListener('limits', e => {
+    S.limits = JSON.parse(e.data);
+    renderLimitsBar();
+    const card = $('#limitsCard');
+    if (card) { card.outerHTML = limitsCardHtml(); wireLimitsCard(); }
   });
   es.addEventListener('approvals', e => { S.approvals = JSON.parse(e.data); renderApprovals(); });
   es.addEventListener('approval', e => onApproval(JSON.parse(e.data)));
@@ -251,8 +257,6 @@ function renderCounts() {
   $('#counts').innerHTML = [
     ['needs-you', c('needs-you'), 'need you'],
     ['working', c('working'), 'working'],
-    ['idle', c('idle'), 'idle'],
-    ['running', running, 'deck runs'],
   ].map(([k, n, l]) => `<span class="count"><span class="dot ${n ? k : 'ended'}"></span><b>${n}</b> ${l}</span>`).join('');
   document.title = c('needs-you') ? `(${c('needs-you')}) Agent Deck` : 'Agent Deck';
 }
@@ -979,34 +983,120 @@ async function renderUsage() {
     b.onclick = () => { S.usageDays = Number(b.dataset.days); renderUsage(); };
   });
   d.querySelector('[data-act=table]').onclick = () => { S.usageTable = !S.usageTable; renderUsage(); };
+  wireLimitsCard();
+  // Claude only reports limits alongside a request; refresh a reading older than 30 minutes.
+  const c = S.limits?.claude;
+  if (!probedOnOpen && (!c || Date.now() - c.at > 30 * 60 * 1000)) {
+    probedOnOpen = true;
+    probeClaude(document.querySelector('#limitsCard [data-act=probe]'));
+  }
+}
+let probedOnOpen = false;
+
+// ---------- plan limits (% left) ----------
+
+const fmtReset = ms => ms ? new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+const leftClass = left => left == null ? '' : left <= 10 ? 'bad' : left <= 30 ? 'warn' : 'ok';
+
+// The tightest window decides how much an agent has left right now.
+function tightest(a) {
+  const ws = [a?.fiveHour, a?.week].filter(w => w?.left != null);
+  return ws.length ? Math.min(...ws.map(w => w.left)) : null;
 }
 
-function limitHtml(label, pct, resetsAt) {
-  if (pct == null) return '';
-  const cls = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
-  // An old reading whose window has since rolled over says nothing about now.
-  if (resetsAt && resetsAt * 1000 < Date.now()) {
-    return `<div class="limit"><div class="top"><span>${esc(label)}</span><span>window has reset since the last reading</span></div></div>`;
+function windowText(w) {
+  if (!w) return '—';
+  if (w.rolledOver) return '~100%'; // window reset after the last reading, and no use recorded since
+  return `${Math.round(w.left)}%`;
+}
+
+function renderLimitsBar() {
+  const L = S.limits || {};
+  const chip = (key, name) => {
+    const a = L[key];
+    if (!a) {
+      return `<button class="limit-chip" data-limits title="No reading yet">${name} <span class="muted">—</span></button>`;
+    }
+    const min = tightest(a);
+    const tip = [
+      `${name}: ${a.blocked ? `limited (${a.blocked})` : 'within limits'}`,
+      a.fiveHour && `5-hour window: ${windowText(a.fiveHour)} left${a.fiveHour.rolledOver ? ' (reset since the last reading)' : ''}${a.fiveHour.resetsAt ? `, resets ${fmtReset(a.fiveHour.resetsAt)}` : ''}`,
+      a.week && `Weekly window: ${windowText(a.week)} left${a.week.resetsAt ? `, resets ${fmtReset(a.week.resetsAt)}` : ''}`,
+      `Reading from ${ago(a.at)} ago`,
+    ].filter(Boolean).join('\n');
+    return `<button class="limit-chip" data-limits title="${esc(tip)}">
+      <span class="dot ${leftClass(a.blocked ? 0 : min)}"></span>${name}
+      <b>${windowText(a.fiveHour)}</b><span class="muted">left · week ${windowText(a.week)}</span></button>`;
+  };
+  $('#limitsBar').innerHTML = chip('claude', 'Claude') + chip('codex', 'Codex');
+}
+
+function limitRow(label, w) {
+  if (!w) return '';
+  if (w.rolledOver) {
+    return `
+      <div class="limit">
+        <div class="top"><span><b>~100% left</b> · ${esc(label)}</span><span>reset since the last reading</span></div>
+        <div class="meter" role="meter" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)}: about 0% used"><div style="width:0%"></div></div>
+      </div>`;
   }
-  const resets = resetsAt ? new Date(resetsAt * 1000).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  const used = Math.round(w.used);
+  const cls = { bad: 'bad', warn: 'warn' }[leftClass(w.left)] || '';
   return `
     <div class="limit">
-      <div class="top"><span><b>${Math.round(pct)}%</b> ${esc(label)}</span><span>${resets ? `resets ${esc(resets)}` : ''}</span></div>
-      <div class="meter ${cls}" role="meter" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)}"><div style="width:${Math.min(100, pct)}%"></div></div>
+      <div class="top"><span><b>${Math.round(w.left)}% left</b> · ${esc(label)}</span><span>${w.resetsAt ? `resets ${esc(fmtReset(w.resetsAt))}` : ''}</span></div>
+      <div class="meter ${cls}" role="meter" aria-valuenow="${used}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)}: ${used}% used"><div style="width:${Math.min(100, used)}%"></div></div>
     </div>`;
 }
 
-function limitsHtml(l) {
-  const c = l.claude?.unifiedWindows;
-  const x = l.codex;
-  const claude = c
-    ? limitHtml('Claude · 5-hour window', c.five_hour?.utilization * 100, c.five_hour?.resetsAt) + limitHtml('Claude · 7-day window', c.seven_day?.utilization * 100, c.seven_day?.resetsAt)
-    : '<div class="hint">Claude limits show up after your next Claude Code run from Agent Deck.</div>';
-  const codex = x
-    ? limitHtml('Codex · 5-hour window', x.primary?.used_percent, x.primary?.resets_at) + limitHtml('Codex · weekly window', x.secondary?.used_percent, x.secondary?.resets_at)
-    : '<div class="hint">No Codex limit data yet.</div>';
-  const asOf = [l.claude?.at && `Claude ${ago(l.claude.at)} ago`, x?.at && `Codex ${ago(x.at)} ago`].filter(Boolean).join(' · ');
-  return `<div class="card"><h3>Plan limits <span class="sub">${asOf ? `as of ${asOf}` : ''}</span></h3><div class="limits">${claude}${codex}</div></div>`;
+function limitsCardHtml() {
+  const L = S.limits || {};
+  const c = L.claude;
+  const x = L.codex;
+  const claude = c ? limitRow('Claude · 5 hours', c.fiveHour) + limitRow('Claude · week', c.week)
+    : '<div class="hint">No Claude reading yet. Click “Check Claude now”.</div>';
+  const codex = x ? limitRow('Codex · 5 hours', x.fiveHour) + limitRow('Codex · week', x.week)
+    : '<div class="hint">No Codex reading yet; it appears after your next Codex session.</div>';
+  const asOf = [c?.at && `Claude ${ago(c.at)} ago`, x?.at && `Codex ${ago(x.at)} ago`].filter(Boolean).join(' · ');
+  return `
+    <div class="card" id="limitsCard">
+      <h3>Plan limits left <span class="sub">${asOf ? `readings from ${asOf}` : ''}</span></h3>
+      <div class="limits">${claude}${codex}</div>
+      <div class="legend" style="margin-top:10px">
+        <span class="hint">Plans don't publish a token allowance, only how much of each window is used. Claude's reading updates whenever Agent Deck runs Claude; Codex's whenever Codex runs anywhere.</span>
+        <button class="chip" data-act="probe" style="margin-left:auto">Check Claude now</button>
+      </div>
+    </div>`;
+}
+
+async function probeClaude(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  try {
+    S.limits = await api('/api/limits/refresh', { method: 'POST' });
+    renderLimitsBar();
+    const card = $('#limitsCard');
+    if (card) { card.outerHTML = limitsCardHtml(); wireLimitsCard(); }
+  } catch (e) {
+    toast(`Couldn't check Claude's limits: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = 'Check Claude now'; }
+  }
+}
+
+function wireLimitsCard() {
+  const b = document.querySelector('#limitsCard [data-act=probe]');
+  if (b) b.onclick = () => probeClaude(b);
+}
+
+function modelsHtml(u) {
+  if (!u.models?.length) return '<div class="hint">No usage in this range.</div>';
+  const max = Math.max(1, ...u.models.map(m => m.tokens));
+  return `
+    <table class="data"><thead><tr><th>Model</th><th>Agent</th><th class="num">Tokens</th><th class="num">Output</th><th style="width:30%"></th></tr></thead>
+    <tbody>${u.models.map(m => `
+      <tr><td class="mono">${esc(m.model)}</td><td><span class="prov ${m.provider}">${PROV[m.provider]}</span></td>
+      <td class="num">${compact(m.tokens)}</td><td class="num">${compact(m.output)}</td>
+      <td><span class="bar" style="width:${(m.tokens / max) * 100}%;background:var(--series-${m.provider})"></span></td></tr>`).join('')}
+    </tbody></table>`;
 }
 
 function usageHtml(u) {
@@ -1024,7 +1114,7 @@ function usageHtml(u) {
   const projects = u.projects.length ? `
     <table class="data"><thead><tr><th>Folder</th><th class="num">Claude Code</th><th class="num">Codex</th><th style="width:30%"></th></tr></thead>
     <tbody>${u.projects.map(p => `
-      <tr><td class="mono" title="${esc(p.cwd)}">${esc(p.cwd.includes('/scratch-workspaces/') ? 'Claude desktop scratch' : p.cwd.replace(/^\/Users\/[^/]+/, '~'))}</td>
+      <tr><td class="mono" title="${esc(p.cwd)}">${esc(p.cwd.replace(/^\/Users\/[^/]+/, '~'))}</td>
       <td class="num">${compact(p.claude)}</td><td class="num">${compact(p.codex)}</td>
       <td>${p.claude ? `<span class="bar" style="width:${(p.claude / maxP) * 100}%;background:var(--series-claude)"></span>` : ''}${p.codex ? `<span class="bar" style="width:${(p.codex / maxP) * 100}%;background:var(--series-codex);margin-left:${p.claude ? 2 : 0}px"></span>` : ''}</td></tr>`).join('')}
     </tbody></table>` : '<div class="hint">No usage in this range.</div>';
@@ -1040,12 +1130,13 @@ function usageHtml(u) {
         ${tile('Cache reads', compact(cache), 'reused context, not in the totals')}
         ${tile('Agent Deck runs', spend ? `$${spend.toFixed(2)}` : '$0', 'API-equivalent cost reported by Claude')}
       </div>
-      ${limitsHtml(u.limits)}
+      ${limitsCardHtml()}
       <div class="card">
         <h3>Tokens per day <span class="sub">fresh input + output, excluding cache reads</span></h3>
         <div class="legend">${legend}<button class="chip" data-act="table" style="margin-left:auto">${S.usageTable ? 'Chart view' : 'Table view'}</button></div>
         ${S.usageTable ? table : '<div class="chart" id="uchart"></div>'}
       </div>
+      <div class="card"><h3>By model <span class="sub">tokens in this range</span></h3>${modelsHtml(u)}</div>
       <div class="card"><h3>By folder <span class="sub">top ${u.projects.length}</span></h3>${projects}</div>
     </div>`;
 }
@@ -1178,8 +1269,13 @@ function wire() {
   $('#showEnded').onchange = e => { S.showEnded = e.target.checked; renderList(); };
   $('#newTaskBtn').onclick = () => openTask();
   $('#usageBtn').onclick = () => { S.sel = { type: 'usage' }; renderList(); renderUsage(); };
+  $('#limitsBar').onclick = e => { if (e.target.closest('[data-limits]')) $('#usageBtn').click(); };
+  setInterval(renderLimitsBar, 60000); // keep "x min ago" and reset times fresh
   $('#setupBtn').onclick = openSetup;
   $('#rolesBtn').onclick = openRoles;
+  // Close the More menu after picking something, or when clicking elsewhere.
+  $('#moreMenu').addEventListener('click', e => { if (e.target.closest('.menu-items button')) $('#moreMenu').open = false; });
+  document.addEventListener('click', e => { if (!e.target.closest('#moreMenu')) $('#moreMenu').open = false; });
   $('#rolesForm').onsubmit = submitRoles;
   $('#addRole').onclick = () => { readRoles(); roleDraft.push({ name: '', provider: 'claude', mode: 'read', description: '', instructions: '' }); drawRoles(); };
   $('#resetRoles').onclick = async () => {
@@ -1229,8 +1325,8 @@ function wire() {
   const nb = $('#notifyBtn');
   if (!window.Notification) nb.hidden = true;
   else {
-    if (Notification.permission === 'granted') nb.textContent = '🔔 On';
-    nb.onclick = async () => { if (await Notification.requestPermission() === 'granted') nb.textContent = '🔔 On'; };
+    if (Notification.permission === 'granted') nb.textContent = '🔔 Notifications on';
+    nb.onclick = async () => { if (await Notification.requestPermission() === 'granted') nb.textContent = '🔔 Notifications on'; };
   }
   setInterval(() => { if (S.tab !== 'pipelines') renderList(); }, 30000); // keep "5m ago" fresh
 }

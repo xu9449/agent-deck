@@ -12,14 +12,20 @@
   <header class="topbar">
     <div class="brand"><span class="logo"></span>Agent Deck</div>
     <div class="counts" id="counts"></div>
+    <div class="limits-bar" id="limitsBar" aria-label="Plan limits left"></div>
     <div class="actions">
       <label class="switch" title="Hold Claude Code permission prompts until you answer them here">
         <input type="checkbox" id="awayToggle"><span class="track"></span> Away mode
       </label>
       <button class="ghost" id="usageBtn">Usage</button>
-      <button class="ghost" id="rolesBtn">Roles</button>
-      <button class="ghost" id="setupBtn" title="Connect permission prompts">Setup</button>
-      <button class="ghost" id="notifyBtn" title="Desktop notifications when an agent needs you or a run ends">🔔 Notify</button>
+      <details class="menu" id="moreMenu">
+        <summary class="ghost">More</summary>
+        <div class="menu-items">
+          <button id="rolesBtn">Roles</button>
+          <button id="setupBtn" title="Connect permission prompts">Permission prompts setup</button>
+          <button id="notifyBtn" title="Desktop notifications when an agent needs you or a run ends">🔔 Notifications</button>
+        </div>
+      </details>
       <button class="ghost" id="newPipelineBtn">New pipeline</button>
       <button class="primary" id="newTaskBtn">New task</button>
     </div>

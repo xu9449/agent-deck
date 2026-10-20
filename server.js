@@ -62,6 +62,50 @@ function refreshAgents() {
 }
 const rank = a => ({ 'needs-you': 0, working: 1, idle: 2, ended: 3 }[a.status] ?? 4);
 
+// ---------- plan limits ----------
+
+// One window of a plan limit, as % left. A reading taken before its window's reset time, when
+// that time has now passed, is out of date (the window rolled over). Codex sometimes reports a
+// reset time earlier than the reading itself; the percentage is current then but the time isn't.
+function windowView(usedPct, resetsAt, at) {
+  if (usedPct == null) return null;
+  const now = Date.now();
+  const resetMs = resetsAt ? resetsAt * 1000 : null;
+  if (resetMs && resetMs < now && resetMs > at) return { used: null, left: null, resetsAt: null, rolledOver: true };
+  return { used: usedPct, left: Math.max(0, 100 - usedPct), resetsAt: resetMs && resetMs > now ? resetMs : null };
+}
+
+function limitsSummary() {
+  const c = runs.latestRateLimit();
+  let x = null;
+  try { x = usage(7, c).limits.codex; } catch { /* no codex data */ }
+  const w = c?.unifiedWindows;
+  return {
+    claude: c ? {
+      at: c.at,
+      fiveHour: windowView(w?.five_hour && w.five_hour.utilization * 100, w?.five_hour?.resetsAt, c.at),
+      week: windowView(w?.seven_day && w.seven_day.utilization * 100, w?.seven_day?.resetsAt, c.at),
+      blocked: c.status && c.status !== 'allowed' ? c.status : null,
+    } : null,
+    codex: x ? {
+      at: x.at,
+      plan: x.plan_type || null,
+      fiveHour: windowView(x.primary?.used_percent, x.primary?.resets_at, x.at),
+      week: windowView(x.secondary?.used_percent, x.secondary?.resets_at, x.at),
+      blocked: x.rate_limit_reached_type || null,
+    } : null,
+  };
+}
+
+let limitsJson = '';
+function refreshLimits() {
+  const json = JSON.stringify(limitsSummary());
+  if (json !== limitsJson) {
+    limitsJson = json;
+    broadcast('limits', JSON.parse(json));
+  }
+}
+
 // ---------- server-sent events ----------
 
 const clients = new Set();
@@ -72,6 +116,7 @@ function broadcast(event, data) {
 runs.bus.on('run', r => broadcast('run', r));
 runs.bus.on('run-event', e => broadcast('run-event', e));
 runs.bus.on('pipeline', p => broadcast('pipeline', p));
+runs.bus.on('limits', () => refreshLimits());
 approvals.bus.on('request', r => { broadcast('approval', r); refreshAgents(); });
 approvals.bus.on('settings', s => broadcast('settings', s));
 manager.bus.on('thread', t => broadcast('thread', t));
@@ -137,6 +182,7 @@ async function api(req, res, url) {
     res.write(`event: approvals\ndata: ${JSON.stringify(approvals.listRequests())}\n\n`);
     res.write(`event: settings\ndata: ${JSON.stringify(approvals.getSettings())}\n\n`);
     res.write(`event: threads\ndata: ${JSON.stringify(manager.listThreads())}\n\n`);
+    res.write(`event: limits\ndata: ${limitsJson || JSON.stringify(limitsSummary())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
@@ -179,6 +225,12 @@ async function api(req, res, url) {
     return send(res, 200, { ok: approvals.decide(am[1], behavior, message) });
   }
 
+  if (m === 'GET' && p === '/api/limits') return send(res, 200, limitsSummary());
+  if (m === 'POST' && p === '/api/limits/refresh') {
+    await runs.probeClaudeLimits();
+    refreshLimits();
+    return send(res, 200, limitsSummary());
+  }
   if (m === 'GET' && p === '/api/usage') return send(res, 200, usage(Math.min(Number(url.searchParams.get('days')) || 30, 180), runs.latestRateLimit()));
 
   if (m === 'GET' && p === '/api/transcript') {
@@ -246,6 +298,8 @@ const server = http.createServer(async (req, res) => {
 
 refreshAgents();
 setInterval(refreshAgents, TICK_MS);
+refreshLimits();
+setInterval(refreshLimits, 30 * 1000); // picks up new Codex readings from its logs
 server.listen(PORT, HOST, () => {
   console.log(`Agent Deck → http://localhost:${PORT}`);
   console.log(`claude: ${runs.BIN.claude || 'not found'}\ncodex:  ${runs.BIN.codex || 'not found'}`);
