@@ -84,6 +84,7 @@ Edit roles under **Roles**; they're saved in `~/.agent-deck/roles.json`. The def
 | Builder | Codex | edit | Implements a given plan, cheaply and quickly |
 | Reviewer | Codex | read-only | Finds real bugs in a diff |
 | Tester | Codex | edit | Writes and runs tests; reports bugs without fixing them |
+| Researcher | Codex | read-only | Reads documents, PDFs and the web; summarizes faithfully with sources |
 | Judge | Claude Code | read-only | Checks the work against the task and gives a verdict |
 
 ### Balancing by plan limits
