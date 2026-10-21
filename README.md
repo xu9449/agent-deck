@@ -129,8 +129,12 @@ Agent Deck reads token counts from the same logs it uses for transcripts:
 Plan limits come from the most recent reading:
 
 - Codex's 5-hour and weekly windows are recorded in its logs.
-- Claude's 5-hour and 7-day windows come from the last Claude run started from Agent Deck. When you open Usage and that reading is more than 30 minutes old, or when you click **Check Claude now**, Agent Deck asks a tiny one-word question with Haiku, without saving a session, just to read the current numbers.
-- If a window's reset time has passed since the last reading, it shows as "~100% left".
+- Claude only reports its 5-hour and 7-day windows alongside a request. Agent Deck re-checks with a tiny one-word Haiku request, not saved as a session:
+  - automatically, when any Claude Code session has been active since the last reading and that reading is over 15 minutes old (an idle Claude means no checks);
+  - whenever you click **Check Claude now**.
+- If a window reset after the last reading:
+  - with no use seen since, it shows "~100% est.";
+  - if the agent has been used since, it shows "checking…" until a fresh reading arrives.
 
 The dollar figure is only the API-equivalent cost that Claude reports for runs started from Agent Deck.
 

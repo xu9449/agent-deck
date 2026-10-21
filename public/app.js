@@ -984,14 +984,7 @@ async function renderUsage() {
   });
   d.querySelector('[data-act=table]').onclick = () => { S.usageTable = !S.usageTable; renderUsage(); };
   wireLimitsCard();
-  // Claude only reports limits alongside a request; refresh a reading older than 30 minutes.
-  const c = S.limits?.claude;
-  if (!probedOnOpen && (!c || Date.now() - c.at > 30 * 60 * 1000)) {
-    probedOnOpen = true;
-    probeClaude(document.querySelector('#limitsCard [data-act=probe]'));
-  }
 }
-let probedOnOpen = false;
 
 // ---------- plan limits (% left) ----------
 
@@ -1006,7 +999,8 @@ function tightest(a) {
 
 function windowText(w) {
   if (!w) return '—';
-  if (w.rolledOver) return '~100%'; // window reset after the last reading, and no use recorded since
+  if (w.unknown) return 'checking…';
+  if (w.estimate) return '~100%';
   return `${Math.round(w.left)}%`;
 }
 
@@ -1020,23 +1014,26 @@ function renderLimitsBar() {
     const min = tightest(a);
     const tip = [
       `${name}: ${a.blocked ? `limited (${a.blocked})` : 'within limits'}`,
-      a.fiveHour && `5-hour window: ${windowText(a.fiveHour)} left${a.fiveHour.rolledOver ? ' (reset since the last reading)' : ''}${a.fiveHour.resetsAt ? `, resets ${fmtReset(a.fiveHour.resetsAt)}` : ''}`,
-      a.week && `Weekly window: ${windowText(a.week)} left${a.week.resetsAt ? `, resets ${fmtReset(a.week.resetsAt)}` : ''}`,
+      a.fiveHour && `5-hour window: ${windowText(a.fiveHour)}${a.fiveHour.unknown ? '' : ' left'}${a.fiveHour.estimate ? ' (estimate: the window reset and no use was seen since)' : ''}${a.fiveHour.resetsAt ? `, resets ${fmtReset(a.fiveHour.resetsAt)}` : ''}`,
+      a.week && `Weekly window: ${windowText(a.week)}${a.week.unknown ? '' : ' left'}${a.week.estimate ? ' (estimate)' : ''}${a.week.resetsAt ? `, resets ${fmtReset(a.week.resetsAt)}` : ''}`,
       `Reading from ${ago(a.at)} ago`,
     ].filter(Boolean).join('\n');
     return `<button class="limit-chip" data-limits title="${esc(tip)}">
       <span class="dot ${leftClass(a.blocked ? 0 : min)}"></span>${name}
-      <b>${windowText(a.fiveHour)}</b><span class="muted">left · week ${windowText(a.week)}</span></button>`;
+      <b>${windowText(a.fiveHour)}</b><span class="muted">${a.fiveHour?.unknown ? '' : 'left '}${a.fiveHour?.estimate ? 'est. ' : ''}· week ${windowText(a.week)}</span></button>`;
   };
   $('#limitsBar').innerHTML = chip('claude', 'Claude') + chip('codex', 'Codex');
 }
 
 function limitRow(label, w) {
   if (!w) return '';
-  if (w.rolledOver) {
+  if (w.unknown) {
+    return `<div class="limit"><div class="top"><span><b>Checking…</b> · ${esc(label)}</span><span>the window reset and Claude has been used since</span></div></div>`;
+  }
+  if (w.estimate) {
     return `
       <div class="limit">
-        <div class="top"><span><b>~100% left</b> · ${esc(label)}</span><span>reset since the last reading</span></div>
+        <div class="top"><span><b>~100% left</b> (estimate) · ${esc(label)}</span><span>reset since the last reading; no use seen since</span></div>
         <div class="meter" role="meter" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(label)}: about 0% used"><div style="width:0%"></div></div>
       </div>`;
   }
@@ -1063,7 +1060,7 @@ function limitsCardHtml() {
       <h3>Plan limits left <span class="sub">${asOf ? `readings from ${asOf}` : ''}</span></h3>
       <div class="limits">${claude}${codex}</div>
       <div class="legend" style="margin-top:10px">
-        <span class="hint">Plans don't publish a token allowance, only how much of each window is used. Claude's reading updates whenever Agent Deck runs Claude; Codex's whenever Codex runs anywhere.</span>
+        <span class="hint">Plans don't publish a token allowance, only how much of each window is used. Codex logs a reading every time it runs on this Mac. Claude only reports one alongside a request, so Agent Deck re-checks it (a tiny Haiku request) when Claude has been in use and the reading is over 15 minutes old.</span>
         <button class="chip" data-act="probe" style="margin-left:auto">Check Claude now</button>
       </div>
     </div>`;
