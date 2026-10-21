@@ -187,6 +187,11 @@ async function api(req, res, url) {
   if (m === 'POST' && p === '/api/manager/threads') return send(res, 201, manager.newThread(await readBody(req)));
   let tm = p.match(/^\/api\/manager\/threads\/([\w-]+)$/);
   if (m === 'DELETE' && tm) return send(res, 200, { deleted: manager.deleteThread(tm[1]) });
+  tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/notes$/);
+  if (m === 'POST' && tm) {
+    const body = await readBody(req);
+    return send(res, 200, manager.note(tm[1], body.text, body.author));
+  }
   tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/retry$/);
   if (m === 'POST' && tm) return send(res, 200, manager.retry(tm[1]));
   tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/messages$/);

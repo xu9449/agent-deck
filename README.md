@@ -67,6 +67,7 @@ The **Manager** tab is where you talk to the team lead. Each conversation is a C
 - **Which agent is the manager:** Claude by default, following the same balancing rule as pipeline steps. If Claude hits its plan limit mid-turn, the turn is retried on Codex right away, and the manager avoids Claude for 20 minutes. When the manager changes agents, the new one gets a recap of the turns it didn't see. Replies from Codex are labeled "answered by Codex".
 - **Files you mention are readable:** absolute paths in your message (e.g. a report in `~/Downloads`) are made readable for that turn, even outside the project folder.
 - **It knows its plans' status:** every turn includes which of this conversation's plans are waiting for approval, running (and on which step, on which agent), or finished.
+- **Notes:** other tools (e.g. a Claude Code session in the terminal) can post a note into a conversation with `POST /api/manager/threads/<id>/notes` `{text, author}`. Notes are shown in the chat, don't start a manager turn, and are included in the manager's next recap.
 - **Try again:** a failed turn has a **Try again** button that re-runs your last message without repeating it.
 
 Conversations are saved in `~/.agent-deck/manager.json`. The manager's own turns show up in **Runs** as "Manager · …".

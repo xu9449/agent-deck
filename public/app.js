@@ -854,6 +854,7 @@ function threadMessagesHtml(t) {
   const lastIdx = t.messages.length - 1;
   const html = t.messages.map((m, i) => {
     if (m.role === 'user') return `<div class="msg user">${md(m.text)}</div>`;
+    if (m.role === 'note') return `<div class="msg text note"><div class="via">Note from ${esc(m.author || 'Claude Code')}</div>${md(m.text)}</div>`;
     if (m.role === 'system') {
       const retry = i === lastIdx && t.status !== 'thinking' && /couldn't (answer|start)/.test(m.text)
         ? ' <button class="linkish" data-retry>Try again</button>' : '';

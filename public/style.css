@@ -323,3 +323,5 @@ dialog select { max-width: 100%; }
 .balance input[type=number] { width: 56px; padding: 2px 6px; margin: 0 2px; }
 .switched { font-size: 12px; color: var(--needs); }
 .msg .via { font-size: 11px; color: var(--codex); font-weight: 600; margin-bottom: 4px; }
+.msg.note { border-left: 3px solid var(--claude); }
+.msg.note .via { color: var(--claude); }
