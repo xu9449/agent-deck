@@ -851,10 +851,16 @@ function planHtml(m) {
 }
 
 function threadMessagesHtml(t) {
-  const html = t.messages.map(m => {
+  const lastIdx = t.messages.length - 1;
+  const html = t.messages.map((m, i) => {
     if (m.role === 'user') return `<div class="msg user">${md(m.text)}</div>`;
-    if (m.role === 'system') return `<div class="msg info">${esc(m.text)}${m.pipelineId ? ` <button class="linkish" data-open-pipe="${m.pipelineId}">open pipeline</button>` : ''}</div>`;
-    return `${m.text ? `<div class="msg text">${md(m.text)}</div>` : ''}${m.plan ? planHtml(m) : ''}${m.planError ? `<div class="msg error">The manager's plan couldn't be used: ${esc(m.planError)}</div>` : ''}`;
+    if (m.role === 'system') {
+      const retry = i === lastIdx && t.status !== 'thinking' && /couldn't (answer|start)/.test(m.text)
+        ? ' <button class="linkish" data-retry>Try again</button>' : '';
+      return `<div class="msg ${/couldn't/.test(m.text) ? 'error' : 'info'}">${esc(m.text)}${m.pipelineId ? ` <button class="linkish" data-open-pipe="${m.pipelineId}">open pipeline</button>` : ''}${retry}</div>`;
+    }
+    const via = m.by === 'codex' ? '<div class="via">answered by Codex</div>' : '';
+    return `${m.text ? `<div class="msg text">${via}${md(m.text)}</div>` : ''}${m.plan ? planHtml(m) : ''}${m.planError ? `<div class="msg error">The manager's plan couldn't be used: ${esc(m.planError)}</div>` : ''}`;
   }).join('');
   const thinking = t.status === 'thinking'
     ? `<div class="msg info thinking">Manager is thinking…${t.runId ? ` <button class="linkish" data-open-run="${t.runId}">watch</button>` : ''}</div>` : '';
@@ -951,6 +957,10 @@ async function onThreadClick(e) {
   const t = S.threads.find(x => x.id === S.sel.id);
   const pipeBtn = e.target.closest('[data-open-pipe]');
   if (pipeBtn) return select('pipe', pipeBtn.dataset.openPipe);
+  if (e.target.closest('[data-retry]')) {
+    try { await api(`/api/manager/threads/${t.id}/retry`, { method: 'POST' }); } catch (err) { toast(err.message); }
+    return;
+  }
   const runBtn = e.target.closest('[data-open-run]');
   if (runBtn) return select('run', runBtn.dataset.openRun);
   const b = e.target.closest('[data-plan-act]');

@@ -64,6 +64,11 @@ The **Manager** tab is where you talk to the team lead. Each conversation is a C
 - **What it never does:** merge into your main branch, push, deploy or restart services. It recommends those as next steps for you.
 - **No loops:** it can start read-only plans on its own at most twice per message from you.
 
+- **Which agent is the manager:** Claude by default, following the same balancing rule as pipeline steps. If Claude hits its plan limit mid-turn, the turn is retried on Codex right away, and the manager avoids Claude for 20 minutes. When the manager changes agents, the new one gets a recap of the turns it didn't see. Replies from Codex are labeled "answered by Codex".
+- **Files you mention are readable:** absolute paths in your message (e.g. a report in `~/Downloads`) are made readable for that turn, even outside the project folder.
+- **It knows its plans' status:** every turn includes which of this conversation's plans are waiting for approval, running (and on which step, on which agent), or finished.
+- **Try again:** a failed turn has a **Try again** button that re-runs your last message without repeating it.
+
 Conversations are saved in `~/.agent-deck/manager.json`. The manager's own turns show up in **Runs** as "Manager · …".
 
 ## Roles
