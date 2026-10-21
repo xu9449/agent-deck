@@ -67,6 +67,7 @@
         <button type="button" data-v="claude" class="active">Claude Code</button>
         <button type="button" data-v="codex">Codex</button>
       </div>
+      <p class="hint switched" id="taskLimitHint" hidden></p>
       <label>Role <select name="role"></select></label>
       <label>Folder <input name="cwd" list="dirs" required placeholder="~/Developer/my-project"></label>
       <label>Permissions <select name="mode"></select></label>
@@ -103,6 +104,10 @@
     <form method="dialog" id="rolesForm">
       <h3>Roles</h3>
       <p class="hint">A role gives an agent a standing job. Pick one for a task or a pipeline step: its instructions go in front of that step's prompt, and its agent and permission level become the defaults. The defaults are based on public comparisons (Oct 2026): Claude Code for planning, big changes and judging; Codex for building, reviewing and testing at lower cost.</p>
+      <div class="balance">
+        <label class="toggle"><input type="checkbox" id="balOn"> <b>Balance by plan limits</b></label>
+        <span class="hint">When a pipeline step starts and its agent has less than <input type="number" id="balThr" min="1" max="90" step="1">% left (the tighter of its 5-hour and weekly windows), the step moves to the other agent, if that one has more left. The step keeps its role and instructions. Steps marked “pin agent” never move.</span>
+      </div>
       <div id="rolesList" class="roles"></div>
       <button type="button" class="ghost" id="addRole">+ Add role</button>
       <p class="err" id="rolesErr"></p>

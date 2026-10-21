@@ -14,6 +14,7 @@ import * as approvals from './lib/approvals.js';
 import { usage } from './lib/usage.js';
 import * as roles from './lib/roles.js';
 import * as manager from './lib/manager.js';
+import * as limits from './lib/limits.js';
 
 const PORT = Number(process.env.PORT || 4545);
 const HOST = '127.0.0.1';
@@ -64,48 +65,6 @@ const rank = a => ({ 'needs-you': 0, working: 1, idle: 2, ended: 3 }[a.status] ?
 
 // ---------- plan limits ----------
 
-// One window of a plan limit, as % left. A reading taken before its window's reset time, when
-// that time has now passed, is out of date (the window rolled over). Codex sometimes reports a
-// reset time earlier than the reading itself; the percentage is current then but the time isn't.
-// usedSince: the agent has been used since the reading, so a rolled-over window can't be
-// assumed empty. Without that, a window that reset with no use since really is ~100% left.
-function windowView(usedPct, resetsAt, at, usedSince = false) {
-  if (usedPct == null) return null;
-  const now = Date.now();
-  const resetMs = resetsAt ? resetsAt * 1000 : null;
-  if (resetMs && resetMs < now && resetMs > at) {
-    return usedSince ? { used: null, left: null, resetsAt: null, unknown: true } : { used: 0, left: 100, resetsAt: null, estimate: true };
-  }
-  return { used: usedPct, left: Math.max(0, 100 - usedPct), resetsAt: resetMs && resetMs > now ? resetMs : null };
-}
-
-// Last time any Claude Code session (outside Agent Deck's limit checks) was active.
-const lastClaudeUse = () => Math.max(0, ...agents.filter(a => a.provider === 'claude').map(a => a.updatedAt || 0));
-
-function limitsSummary() {
-  const c = runs.latestRateLimit();
-  const claudeUsedSince = c ? lastClaudeUse() > c.at : false;
-  let x = null;
-  try { x = usage(7, c).limits.codex; } catch { /* no codex data */ }
-  const w = c?.unifiedWindows;
-  return {
-    claude: c ? {
-      at: c.at,
-      fiveHour: windowView(w?.five_hour && w.five_hour.utilization * 100, w?.five_hour?.resetsAt, c.at, claudeUsedSince),
-      week: windowView(w?.seven_day && w.seven_day.utilization * 100, w?.seven_day?.resetsAt, c.at, claudeUsedSince),
-      stale: claudeUsedSince,
-      blocked: c.status && c.status !== 'allowed' ? c.status : null,
-    } : null,
-    codex: x ? {
-      at: x.at,
-      plan: x.plan_type || null,
-      fiveHour: windowView(x.primary?.used_percent, x.primary?.resets_at, x.at),
-      week: windowView(x.secondary?.used_percent, x.secondary?.resets_at, x.at),
-      blocked: x.rate_limit_reached_type || null,
-    } : null,
-  };
-}
-
 // Claude only reports limits alongside a request. Re-check (a tiny Haiku request, not saved)
 // when Claude has been used since the last reading and that reading is over 15 minutes old.
 // Idle Claude means no checks.
@@ -114,7 +73,7 @@ let lastClaudeCheck = 0;
 async function maybeCheckClaude() {
   const c = runs.latestRateLimit();
   const now = Date.now();
-  if (c && lastClaudeUse() <= c.at) return;
+  if (c && limits.lastClaudeUse() <= c.at) return;
   if (c && now - c.at < CLAUDE_CHECK_MS) return;
   if (now - lastClaudeCheck < CLAUDE_CHECK_MS || !runs.BIN.claude) return;
   lastClaudeCheck = now;
@@ -128,7 +87,7 @@ async function maybeCheckClaude() {
 
 let limitsJson = '';
 function refreshLimits() {
-  const json = JSON.stringify(limitsSummary());
+  const json = JSON.stringify(limits.limitsSummary());
   if (json !== limitsJson) {
     limitsJson = json;
     broadcast('limits', JSON.parse(json));
@@ -211,7 +170,7 @@ async function api(req, res, url) {
     res.write(`event: approvals\ndata: ${JSON.stringify(approvals.listRequests())}\n\n`);
     res.write(`event: settings\ndata: ${JSON.stringify(approvals.getSettings())}\n\n`);
     res.write(`event: threads\ndata: ${JSON.stringify(manager.listThreads())}\n\n`);
-    res.write(`event: limits\ndata: ${limitsJson || JSON.stringify(limitsSummary())}\n\n`);
+    res.write(`event: limits\ndata: ${limitsJson || JSON.stringify(limits.limitsSummary())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
     return;
@@ -254,11 +213,11 @@ async function api(req, res, url) {
     return send(res, 200, { ok: approvals.decide(am[1], behavior, message) });
   }
 
-  if (m === 'GET' && p === '/api/limits') return send(res, 200, limitsSummary());
+  if (m === 'GET' && p === '/api/limits') return send(res, 200, limits.limitsSummary());
   if (m === 'POST' && p === '/api/limits/refresh') {
     await runs.probeClaudeLimits();
     refreshLimits();
-    return send(res, 200, limitsSummary());
+    return send(res, 200, limits.limitsSummary());
   }
   if (m === 'GET' && p === '/api/usage') return send(res, 200, usage(Math.min(Number(url.searchParams.get('days')) || 30, 180), runs.latestRateLimit()));
 
@@ -325,6 +284,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+limits.setAgentsSource(() => agents);
+runs.setProviderChooser(limits.chooseProvider);
 refreshAgents();
 setInterval(refreshAgents, TICK_MS);
 refreshLimits();

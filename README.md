@@ -81,6 +81,19 @@ Edit roles under **Roles**; they're saved in `~/.agent-deck/roles.json`. The def
 | Tester | Codex | edit | Writes and runs tests; reports bugs without fixing them |
 | Judge | Claude Code | read-only | Checks the work against the task and gives a verdict |
 
+### Balancing by plan limits
+
+Roles decide who is *best* for a job; balancing makes sure the work goes to whoever has capacity. When a pipeline step starts:
+
+- If its agent has less than the threshold left (default **20%**, counting the tighter of its 5-hour and weekly windows), or it's blocked, the step moves to the other agent, as long as the other agent has at least the threshold left and more than the first. The step keeps its role and instructions.
+- **Pin agent** keeps a step on its agent no matter what. The Race template pins both builders, since comparing the two agents is the point.
+- When both agents are low, nothing moves.
+- Moves are shown on the step and the run ("⇄ Moved from Claude Code to Codex: Claude Code had 12% left, Codex 80%"), and included in the manager's report.
+- The manager sees the current numbers and the rule, so it can plan around a low agent.
+- Direct tasks from **New task** never move, but the dialog warns you when the agent you picked is low.
+
+Turn balancing on or off and set the threshold at the top of the **Roles** dialog (saved in `~/.agent-deck/settings.json`).
+
 Why this split:
 
 - **Claude Code (Opus 5.5):** leads SWE-bench Pro and visual-coding benchmarks, and is strongest at long, multi-file work and at understanding existing code.

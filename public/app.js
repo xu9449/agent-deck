@@ -474,6 +474,7 @@ function runMeta(r) {
     `<span>${esc(S.config?.modes?.[r.mode] || r.mode)}</span>`,
     `<span class="mono">${esc(r.cwd.replace(/^\/Users\/[^/]+/, '~'))}</span>`,
     r.resumeId && `<span>${r.fork ? 'fork of' : 'follow-up to'} ${esc(r.resumeId.slice(0, 8))}</span>`,
+    r.switched && `<span class="switched">⇄ ${esc(r.switched)}</span>`,
     r.costUsd != null && `<span>$${r.costUsd.toFixed(3)}</span>`,
     r.tokens && `<span>${r.tokens.input_tokens + r.tokens.output_tokens} tokens</span>`,
     `<span>${dur < 90 ? Math.round(dur) + 's' : Math.round(dur / 60) + 'm'}</span>`,
@@ -497,8 +498,9 @@ function pipeHtml(p) {
     return `
       <div class="pstep" ${r ? `data-run="${r.id}"` : ''}>
         <div><span class="dot ${r?.status || 'ended'}" style="display:inline-block"></span>
-          <b>Step ${i + 1}</b> ${s.role ? roleBadge(roleById(s.role) || s.role) : ''} · <span class="prov ${s.provider}">${PROV[s.provider]}</span> · ${esc(S.config?.modes?.[s.mode] || s.mode)} · <span class="pill ${st}">${esc(STATUS[st] || st)}</span></div>
+          <b>Step ${i + 1}</b> ${s.role ? roleBadge(roleById(s.role) || s.role) : ''} · <span class="prov ${r?.provider || s.provider}">${PROV[r?.provider || s.provider]}</span>${s.pinned ? ' <span class="tag">pinned</span>' : ''} · ${esc(S.config?.modes?.[s.mode] || s.mode)} · <span class="pill ${st}">${esc(STATUS[st] || st)}</span></div>
         ${s.parallel ? '<div><span class="tag">runs alongside the previous step</span></div>' : ''}
+        ${r?.switched ? `<div class="switched">⇄ ${esc(r.switched)}</div>` : ''}
         ${r?.worktree ? `<div class="wt">⎇ ${esc(r.worktree.branch)} · ${r.worktree.removed ? 'worktree removed (branch kept)' : esc(r.worktree.dir.replace(/^\/Users\/[^/]+/, '~'))}${r.worktree.files != null ? ` · ${r.worktree.files} files changed` : ''}${r.worktree.commitError ? ` · commit failed: ${esc(r.worktree.commitError)}` : ''}</div>` : (s.worktree ? '<div class="wt">⎇ own worktree</div>' : '')}
         ${s.allowedTools?.length ? `<div class="wt">pre-approved: ${esc(s.allowedTools.join(', '))}</div>` : ''}
         <div class="prompt">${esc(s.prompt)}</div>
@@ -601,6 +603,9 @@ function drawRoles() {
   });
 }
 function openRoles() {
+  const b = S.settings.balance || { enabled: true, threshold: 20 };
+  $('#balOn').checked = b.enabled;
+  $('#balThr').value = b.threshold;
   roleDraft = structuredClone(S.roles);
   drawRoles();
   $('#rolesErr').textContent = '';
@@ -611,6 +616,7 @@ async function submitRoles(e) {
   if (e.submitter?.value === 'cancel') return $('#rolesDialog').close();
   readRoles();
   try {
+    S.settings = await api('/api/settings', { method: 'POST', body: { balance: { enabled: $('#balOn').checked, threshold: Number($('#balThr').value) } } });
     S.roles = await api('/api/roles', { method: 'PUT', body: roleDraft });
     $('#rolesDialog').close();
     toast('Roles saved');
@@ -622,10 +628,22 @@ async function submitRoles(e) {
 // ---------- new task ----------
 
 let taskProvider = 'claude';
+
+// Warn when the agent picked for a direct task is low on plan limits (tasks aren't moved).
+function updateTaskLimitHint() {
+  const el = $('#taskLimitHint');
+  const thr = S.settings.balance?.threshold ?? 20;
+  const other = taskProvider === 'claude' ? 'codex' : 'claude';
+  const mine = tightest(S.limits?.[taskProvider]);
+  const theirs = tightest(S.limits?.[other]);
+  el.hidden = !(mine != null && mine < thr);
+  if (!el.hidden) el.textContent = `${PROV[taskProvider]} has ${Math.round(mine)}% left${theirs != null ? `; ${PROV[other]} has ${Math.round(theirs)}%` : ''}. Consider switching.`;
+}
 function openTask(prefill = {}) {
   const f = $('#taskForm');
   taskProvider = prefill.provider || localStorage.getItem('deck.provider') || 'claude';
   document.querySelectorAll('#taskProvider button').forEach(b => b.classList.toggle('active', b.dataset.v === taskProvider));
+  updateTaskLimitHint();
   f.mode.innerHTML = modeOptions(prefill.mode || localStorage.getItem('deck.mode') || 'edit');
   f.elements.role.innerHTML = roleOptions(prefill.role?.id || prefill.role || '');
   f.cwd.value = prefill.cwd || localStorage.getItem('deck.cwd') || '';
@@ -670,8 +688,8 @@ const TEMPLATES = {
     { provider: 'codex', mode: 'read', prompt: 'Question: {{task}}\n\nAnswer it yourself first. Then compare with another agent\'s answer below and say where you agree and disagree.\n\n{{prev}}' },
   ],
   race: [
-    { role: 'lead', provider: 'claude', mode: 'edit', worktree: true, prompt: '{{task}}' },
-    { role: 'builder', provider: 'codex', mode: 'edit', worktree: true, parallel: true, prompt: '{{task}}' },
+    { role: 'lead', provider: 'claude', mode: 'edit', worktree: true, pinned: true, prompt: '{{task}}' },
+    { role: 'builder', provider: 'codex', mode: 'edit', worktree: true, parallel: true, pinned: true, prompt: '{{task}}' },
     { role: 'judge', provider: 'claude', mode: 'read', prompt: 'Task: {{task}}\n\nTwo agents each did this task on separate git branches (below). Compare the diffs and say which branch to merge.\n\n{{prev}}' },
   ],
 };
@@ -689,6 +707,7 @@ function stepHtml(s, i) {
       <div class="opts">
         ${i ? `<label><input type="checkbox" data-f="parallel" ${s.parallel ? 'checked' : ''}> run alongside previous step</label>` : ''}
         <label title="Work on a fresh branch in its own git worktree, so parallel edits never collide"><input type="checkbox" data-f="worktree" ${s.worktree ? 'checked' : ''}> own git worktree</label>
+        <label title="Always use this agent, even when it's low on plan limits"><input type="checkbox" data-f="pinned" ${s.pinned ? 'checked' : ''}> pin agent</label>
       </div>
       <textarea data-f="allowedTools" rows="1" class="mono" placeholder="Claude only: commands it may run without asking, one per line, e.g. Bash(npm test:*)">${esc((s.allowedTools || []).join('\n'))}</textarea>
       <textarea data-f="prompt" rows="4" placeholder="${i ? 'Use {{prev}} for the previous step\'s answer' : 'First step prompt'}">${esc(s.prompt)}</textarea>
@@ -703,6 +722,7 @@ function readSteps() {
     prompt: li.querySelector('[data-f=prompt]').value,
     parallel: !!li.querySelector('[data-f=parallel]')?.checked,
     worktree: li.querySelector('[data-f=worktree]').checked,
+    pinned: li.querySelector('[data-f=pinned]').checked,
     role: li.querySelector('[data-f=role]').value || null,
     allowedTools: li.querySelector('[data-f=allowedTools]').value.split('\n').map(t => t.trim()).filter(Boolean),
   }));
@@ -812,7 +832,7 @@ function planHtml(m) {
   const pillCls = p.status === 'proposed' ? 'needs-you' : p.status === 'done' ? 'done' : ['running', 'auto-running'].includes(p.status) ? 'running' : p.status;
   const steps = p.steps.map(s => `
     <li>${s.role ? roleBadge(roleById(s.role) || s.role) : ''} <span class="prov ${s.provider}">${PROV[s.provider]}</span>
-      <span class="hint">${MODE_SHORT[s.mode]}${s.parallel ? ' · alongside the previous step' : ''}${s.worktree ? ' · own git branch' : ''}${s.allowedTools?.length ? ` · may run ${esc(s.allowedTools.join(', '))}` : ''}</span>
+      <span class="hint">${MODE_SHORT[s.mode]}${s.parallel ? ' · alongside the previous step' : ''}${s.worktree ? ' · own git branch' : ''}${s.pinned ? ' · pinned' : ''}${s.allowedTools?.length ? ` · may run ${esc(s.allowedTools.join(', '))}` : ''}</span>
       <details><summary>Prompt</summary><pre>${esc(s.prompt)}</pre></details></li>`).join('');
   return `
     <div class="plan ${p.status}" data-msg="${m.id}">
@@ -1285,6 +1305,7 @@ function wire() {
     taskProvider = r.provider;
     document.querySelectorAll('#taskProvider button').forEach(x => x.classList.toggle('active', x.dataset.v === r.provider));
     $('#taskForm').mode.value = r.mode;
+    updateTaskLimitHint();
   };
   $('#copyHook').onclick = () => { navigator.clipboard.writeText($('#hookSnippet').value); toast('Hook config copied'); };
   $('#awayToggle').onchange = async e => {
@@ -1314,6 +1335,7 @@ function wire() {
     if (!b) return;
     taskProvider = b.dataset.v;
     document.querySelectorAll('#taskProvider button').forEach(x => x.classList.toggle('active', x === b));
+    updateTaskLimitHint();
   };
   $('#addStep').onclick = () => { readSteps(); pipeSteps.push({ provider: 'claude', mode: 'edit', prompt: '' }); drawSteps(); };
   document.querySelectorAll('[data-tpl]').forEach(b => {

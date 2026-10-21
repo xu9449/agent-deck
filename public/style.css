@@ -318,3 +318,7 @@ dialog select { max-width: 100%; }
 .menu-items button:hover { background: var(--panel-2); }
 #limitsCard .limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 820px) { #limitsCard .limits { grid-template-columns: 1fr; } }
+.balance { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; background: var(--panel-2); }
+.balance .toggle { margin: 0; color: var(--text); font-size: 13.5px; }
+.balance input[type=number] { width: 56px; padding: 2px 6px; margin: 0 2px; }
+.switched { font-size: 12px; color: var(--needs); }
