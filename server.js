@@ -206,6 +206,9 @@ async function api(req, res, url) {
   if (m === 'PUT' && p === '/api/roles') return send(res, 200, roles.saveRoles(await readBody(req)));
   if (m === 'POST' && p === '/api/roles/reset') return send(res, 200, roles.resetRoles());
 
+  tm = p.match(/^\/api\/manager\/threads\/([\w-]+)\/auto-approve$/);
+  if (m === 'POST' && tm) return send(res, 200, manager.setThreadAutoApprove(tm[1], (await readBody(req)).on));
+  if (m === 'POST' && p === '/api/manager/approve-waiting') return send(res, 200, { started: manager.approveWaiting() });
   if (m === 'POST' && p === '/api/settings') return send(res, 200, approvals.setSettings(await readBody(req)));
   if (m === 'GET' && p === '/api/hook-config') {
     return send(res, 200, {
@@ -254,6 +257,8 @@ async function api(req, res, url) {
   if (m === 'POST' && p === '/api/pipelines') return send(res, 201, runs.startPipeline(await readBody(req)));
   mm = p.match(/^\/api\/pipelines\/([\w-]+)\/stop$/);
   if (m === 'POST' && mm) return send(res, 200, { stopped: runs.stopPipeline(mm[1]) });
+  mm = p.match(/^\/api\/pipelines\/([\w-]+)\/resume$/);
+  if (m === 'POST' && mm) return send(res, 200, runs.resumePipeline(mm[1]));
   mm = p.match(/^\/api\/pipelines\/([\w-]+)\/cleanup$/);
   if (m === 'POST' && mm) return send(res, 200, runs.removeWorktrees(mm[1]));
 

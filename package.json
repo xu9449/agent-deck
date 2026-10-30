@@ -11,6 +11,7 @@
     "start": "node --no-warnings=ExperimentalWarning server.js",
     "service:install": "node scripts/service.js install",
     "service:uninstall": "node scripts/service.js uninstall",
-    "service:status": "node scripts/service.js status"
+    "service:status": "node scripts/service.js status",
+    "restart": "node scripts/restart.js"
   }
 }

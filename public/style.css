@@ -325,3 +325,7 @@ dialog select { max-width: 100%; }
 .msg .via { font-size: 11px; color: var(--codex); font-weight: 600; margin-bottom: 4px; }
 .msg.note { border-left: 3px solid var(--claude); }
 .msg.note .via { color: var(--claude); }
+.switch.auto input:checked + .track { background: var(--accent); }
+.switch, .count { white-space: nowrap; }
+.menu-switch { padding: 6px 12px; color: var(--text); }
+.dhead .switch { font-size: 12.5px; }

@@ -16,6 +16,7 @@ npm start                  # → http://localhost:4545
 PORT=5000 npm start        # different port
 npm run service:install    # start at login and restart on crash (LaunchAgent)
 npm run service:uninstall  # remove that again
+npm run restart            # restart the service once nothing is running (waits up to an hour)
 ```
 
 Turn on **🔔 Notify** to get a desktop notification when an agent starts waiting for you or a run finishes.
@@ -58,6 +59,7 @@ The **Manager** tab is where you talk to the team lead. Each conversation is a C
 - **Questions:** it answers questions about the project itself by reading the code. It can read files and run read-only commands; its file-editing tools are switched off.
 - **Plans:** for real work it proposes a plan, shown as a card: a pipeline of roles (see below), with each step's agent, permissions and prompt. It's told who is good at what, and how much of each plan limit is used right now, so it can save Claude's limits.
 - **When a plan runs on its own:** if every step is read-only (no edits, no branches, no pre-approved commands) and there are at most 3 steps. Reviews, investigations and second opinions are like that.
+- **Auto-approve:** the **Auto-approve all** switch in the header, or **Auto-approve this conversation** at the top of a conversation, makes every plan start without waiting for you. Plans with Full auto steps (no sandbox, no permission checks) still wait. Code changes still go on their own branch. The manager can start at most 3 plans on its own per message from you. When you turn on the header switch, it asks whether to also start plans already waiting.
 - **When it waits for you:** for everything else. **Approve & run**, **Edit…** (opens the pipeline editor), or **Reject**.
 - **Code changes always go on their own git branch**, even if the plan forgot to say so, so your checkout is never touched.
 - **Reports:** when a plan finishes, its results go back to the manager, which tells you what happened, what changed (branch names), test results, problems, and what it recommends next.
@@ -115,6 +117,7 @@ The margins are small, so treat the defaults as a starting point and use the Rac
 - **Run alongside previous step** puts a step in the same stage as the one before it, so they run at the same time. The next step gets all their answers.
 - **Pre-approved commands** (Claude steps only) are passed as `--allowedTools`, so a headless Claude can run e.g. `Bash(npm test:*)` without being refused. Codex steps don't need this; their sandbox already allows commands inside the folder.
 - **Own git worktree** runs a step on a fresh branch `deck/<pipeline>-s<n>` in `~/.agent-deck/worktrees/`, based on the folder's last commit. Uncommitted changes in your folder aren't included. When the step finishes its changes are committed on that branch, and the next step is told how to diff it. **Remove worktrees** deletes the folders but keeps the branches.
+- **Resume:** an interrupted, failed or stopped pipeline can be resumed from the first step that didn't finish. Finished steps and their answers are kept; a resumed worktree step starts over on a fresh branch. A pipeline is marked interrupted when Agent Deck restarts while it's running, so restart with `npm run restart`, which waits until nothing is running.
 - Templates:
   - **Claude builds → Codex reviews:** Lead engineer → Reviewer.
   - **Claude plans → Codex builds → Claude reviews:** Architect → Builder → Judge. This saves Claude's limits for planning and judging.

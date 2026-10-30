@@ -105,7 +105,15 @@ function connect() {
   });
   es.addEventListener('approvals', e => { S.approvals = JSON.parse(e.data); renderApprovals(); });
   es.addEventListener('approval', e => onApproval(JSON.parse(e.data)));
-  es.addEventListener('settings', e => { S.settings = JSON.parse(e.data); $('#awayToggle').checked = S.settings.awayMode; });
+  es.addEventListener('settings', e => {
+    S.settings = JSON.parse(e.data);
+    $('#awayToggle').checked = S.settings.awayMode;
+    $('#autoToggle').checked = !!S.settings.autoApprove;
+    if (S.sel?.type === 'thread') {
+      const t = S.threads.find(x => x.id === S.sel.id);
+      if (t) syncThreadAuto(t);
+    }
+  });
   es.onerror = () => { /* EventSource retries on its own */ };
 }
 
@@ -365,6 +373,7 @@ function renderDetail() {
     d.querySelectorAll('.pstep[data-run]').forEach(el => { el.onclick = () => select('run', el.dataset.run); });
     d.querySelector('[data-act=stop]')?.addEventListener('click', () => api(`/api/pipelines/${p.id}/stop`, { method: 'POST' }));
     d.querySelector('[data-act=rerun]').onclick = () => openPipeline(p);
+    d.querySelector('[data-act=resume]')?.addEventListener('click', () => api(`/api/pipelines/${p.id}/resume`, { method: 'POST' }).catch(e => toast(e.message)));
     d.querySelector('[data-act=cleanup]')?.addEventListener('click', async () => {
       if (!confirm('Delete the worktree folders for this pipeline? The branches stay, so committed work is kept.')) return;
       try {
@@ -513,6 +522,7 @@ function pipeHtml(p) {
       <div class="meta"><span class="pill ${p.status}">${esc(STATUS[p.status] || p.status)}</span><span class="mono">${esc(p.cwd.replace(/^\/Users\/[^/]+/, '~'))}</span>${p.error ? `<span>${esc(p.error)}</span>` : ''}</div>
       <div class="dactions">
         ${p.status === 'running' ? '<button class="danger" data-act="stop">Stop pipeline</button>' : ''}
+        ${['interrupted', 'failed', 'stopped'].includes(p.status) ? '<button class="primary" data-act="resume" title="Run again from the first step that didn\'t finish; finished steps are kept">Resume</button>' : ''}
         <button data-act="rerun">Edit &amp; run again…</button>
         ${p.runIds.some(id => { const w = S.runs.find(x => x.id === id)?.worktree; return w && !w.removed; }) && p.status !== 'running' ? '<button data-act="cleanup" title="Deletes the worktree folders; branches stay">Remove worktrees</button>' : ''}
       </div>
@@ -828,7 +838,9 @@ function threadListHtml() {
 
 function planHtml(m) {
   const p = m.plan;
-  const status = p.status === 'proposed' && p.auto ? 'starting…' : PLAN_STATUS[p.status] || p.status;
+  const status = p.status === 'proposed' && p.auto ? 'starting…'
+    : p.autoApproved && ['auto-running', 'running'].includes(p.status) ? 'running (auto-approved)'
+    : PLAN_STATUS[p.status] || p.status;
   const pillCls = p.status === 'proposed' ? 'needs-you' : p.status === 'done' ? 'done' : ['running', 'auto-running'].includes(p.status) ? 'running' : p.status;
   const steps = p.steps.map(s => `
     <li>${s.role ? roleBadge(roleById(s.role) || s.role) : ''} <span class="prov ${s.provider}">${PROV[s.provider]}</span>
@@ -845,6 +857,7 @@ function planHtml(m) {
       ${p.error ? `<div class="warn">Couldn't start: ${esc(p.error)}</div>` : ''}
       <div class="btns">
         ${p.status === 'proposed' ? `<button class="primary" data-plan-act="approve">Approve &amp; run</button><button data-plan-act="edit">Edit…</button><button class="ghost" data-plan-act="reject">Reject</button>` : ''}
+        ${p.pipelineId && ['interrupted', 'failed', 'stopped'].includes(p.status) ? `<button class="primary" data-plan-act="resume">Resume</button>` : ''}
         ${p.pipelineId ? `<button data-plan-act="open">Open pipeline</button>` : ''}
       </div>
     </div>`;
@@ -874,17 +887,25 @@ function threadMeta(t) {
     <span class="mono">${esc(t.cwd.replace(/^\/Users\/[^/]+/, '~'))}</span><span>started ${ago(t.createdAt)} ago</span>`;
 }
 
+function composerNote(t) {
+  t ??= S.sel?.type === 'thread' && S.threads.find(x => x.id === S.sel.id);
+  return S.settings.autoApprove || t?.autoApprove
+    ? 'Auto-approve is on: plans start right away, except Full auto steps. Code changes still go on their own git branch.'
+    : 'Questions and small read-only jobs run on their own. Anything that changes code waits for your approval and goes on its own git branch.';
+}
+
 function renderThread(t) {
   $('#detail').innerHTML = `
     <div class="dhead">
       <h2>${esc(t.title)}</h2>
       <div class="meta" id="tmeta">${threadMeta(t)}</div>
+      <div class="dactions"><label class="switch auto" id="tAutoLabel"><input type="checkbox" id="tAuto"><span class="track"></span> Auto-approve this conversation</label></div>
     </div>
     <div class="stream chat" id="stream"></div>
     <div class="composer">
       <textarea id="mText" placeholder="Tell the manager what you want… (⌘↵ to send)"></textarea>
       <div class="row">
-        <span class="note">Questions and small read-only jobs run on their own. Anything that changes code waits for your approval and goes on its own git branch.</span>
+        <span class="note" id="mNote">${esc(composerNote())}</span>
         <button class="ghost danger" id="mDelete">Delete</button>
         <button class="primary" id="mSend">Send</button>
       </div>
@@ -901,6 +922,12 @@ function renderThread(t) {
     $('#mSend').disabled = false;
   };
   $('#mSend').onclick = send;
+  $('#tAuto').onchange = async e => {
+    try {
+      await api(`/api/manager/threads/${t.id}/auto-approve`, { method: 'POST', body: { on: e.target.checked } });
+      toast(e.target.checked ? 'Plans in this conversation now start right away (except Full auto steps)' : 'Plans in this conversation wait for your approval again');
+    } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+  };
   $('#mText').onkeydown = e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); };
   $('#mDelete').onclick = async () => {
     if (!confirm('Delete this conversation? Pipelines it started are kept.')) return;
@@ -916,6 +943,19 @@ function updateThread(t, first = false) {
   if (stick) stream.scrollTop = stream.scrollHeight;
   const meta = $('#tmeta');
   if (meta) meta.innerHTML = threadMeta(t);
+  syncThreadAuto(t);
+}
+
+// The conversation's switch shows on (and locked) while the header's "all" switch is on.
+function syncThreadAuto(t) {
+  const box = $('#tAuto');
+  if (!box) return;
+  const all = !!S.settings.autoApprove;
+  box.checked = all || !!t.autoApprove;
+  box.disabled = all;
+  $('#tAutoLabel').title = all ? 'On for all conversations (header switch)' : 'Plans in this conversation start without waiting for your approval (except Full auto steps)';
+  const note = $('#mNote');
+  if (note) note.textContent = composerNote(t);
 }
 
 function renderNewThread() {
@@ -970,6 +1010,10 @@ async function onThreadClick(e) {
   const plan = t.messages.find(m => m.id === msgId)?.plan;
   const act = b.dataset.planAct;
   if (act === 'open') return select('pipe', plan.pipelineId);
+  if (act === 'resume') {
+    try { await api(`/api/pipelines/${plan.pipelineId}/resume`, { method: 'POST' }); toast('Resumed from the step that didn\'t finish'); } catch (err) { toast(err.message); }
+    return;
+  }
   if (act === 'edit') return openPipeline({ ...plan, context: { threadId: t.id, msgId } });
   b.disabled = true;
   try {
@@ -1319,6 +1363,23 @@ function wire() {
     updateTaskLimitHint();
   };
   $('#copyHook').onclick = () => { navigator.clipboard.writeText($('#hookSnippet').value); toast('Hook config copied'); };
+  $('#autoToggle').onchange = async e => {
+    const on = e.target.checked;
+    try {
+      S.settings = await api('/api/settings', { method: 'POST', body: { autoApprove: on } });
+      if (!on) return toast('Auto-approve off: plans that change code wait for your approval again');
+      const waiting = S.threads.flatMap(t => t.messages.filter(m => m.plan?.status === 'proposed' && !m.plan.steps.some(s => s.mode === 'full')));
+      if (waiting.length && confirm(`Auto-approve is on.\n\n${waiting.length} plan${waiting.length > 1 ? 's are' : ' is'} already waiting:\n${waiting.map(m => `• ${m.plan.name}`).join('\n')}\n\nStart ${waiting.length > 1 ? 'them' : 'it'} now too?`)) {
+        const { started } = await api('/api/manager/approve-waiting', { method: 'POST' });
+        toast(`Auto-approve on. Started ${started} waiting plan${started === 1 ? '' : 's'}.`);
+      } else {
+        toast('Auto-approve on: new plans start right away (except Full auto steps)');
+      }
+    } catch (err) {
+      toast(err.message);
+      e.target.checked = !on;
+    }
+  };
   $('#awayToggle').onchange = async e => {
     try {
       S.settings = await api('/api/settings', { method: 'POST', body: { awayMode: e.target.checked } });
